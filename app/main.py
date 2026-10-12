@@ -1,6 +1,7 @@
 """FastAPI app: serves the page and a small JSON API over Storage + KrogerClient."""
 from __future__ import annotations
 
+import re
 from dataclasses import asdict
 from pathlib import Path
 from urllib.parse import quote
@@ -39,16 +40,16 @@ def create_app(storage: Storage, kroger) -> FastAPI:
     """`kroger` is a KrogerClient or anything with the same methods (tests pass a fake)."""
     app = FastAPI(title="Kroger Reorder")
 
+    def error(status: int, message: str, **extra) -> JSONResponse:
+        return JSONResponse(status_code=status, content={"error": message, **extra})
+
     @app.exception_handler(NotSignedIn)
     async def not_signed_in(_: Request, exc: NotSignedIn):
-        return JSONResponse(status_code=401, content={"error": exc.message, "signed_in": False})
+        return error(401, exc.message, signed_in=False)
 
     @app.exception_handler(KrogerError)
     async def kroger_error(_: Request, exc: KrogerError):
-        return JSONResponse(status_code=502, content={"error": f"Kroger said: {exc.message}"})
-
-    def error(status: int, message: str, **extra) -> JSONResponse:
-        return JSONResponse(status_code=status, content={"error": message, **extra})
+        return error(502, f"Kroger said: {exc.message}")
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, exc: RequestValidationError):
@@ -134,7 +135,8 @@ def create_app(storage: Storage, kroger) -> FastAPI:
         except NotSignedIn:
             raise
         except KrogerError as exc:
-            bad = [i.upc for i in chosen if i.upc in exc.message]
+            # Whole-token match so "1111041" is not flagged when Kroger rejects "0001111041700".
+            bad = [i.upc for i in chosen if re.search(rf"(?<!\d){re.escape(i.upc)}(?!\d)", exc.message)]
             return error(502, f"Kroger said: {exc.message}", bad_upcs=bad)
         return {"added": [asdict(i) for i in chosen]}
 

@@ -191,6 +191,17 @@ def test_push_kroger_rejection_flags_bad_upc(client, kroger, storage):
     assert all(i.included is True for i in saved)
 
 
+def test_push_bad_upc_does_not_match_partial_codes(client, kroger):
+    kroger.cart_error = KrogerError(400, "Invalid UPC 0001111041700")
+    body = [
+        {"upc": "0001111041700", "name": "Milk", "size": "", "quantity": 1, "included": True},
+        {"upc": "1111041", "name": "Eggs", "size": "", "quantity": 1, "included": True},
+    ]
+    r = client.post("/api/push", json=body)
+    assert r.status_code == 502
+    assert r.json()["bad_upcs"] == ["0001111041700"]
+
+
 def test_callback_denied_redirects_home_with_error(client, kroger):
     r = client.get("/callback", params={"error": "access_denied"})
     assert r.status_code in (302, 307)
