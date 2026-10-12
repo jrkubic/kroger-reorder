@@ -144,3 +144,92 @@ def test_kroger_error_falls_back_to_status_when_body_is_not_json(client, server)
         client.find_stores("45209")
     assert info.value.status == 503
     assert "503" in info.value.message
+
+
+USER_TOKEN = {"access_token": "user-tok", "refresh_token": "refresh-1", "expires_in": 1800, "token_type": "bearer"}
+
+
+def test_authorize_url_has_scope_and_redirect(client):
+    url = urlparse(client.authorize_url())
+    assert url.scheme == "https"
+    assert url.netloc == "api.kroger.com"
+    assert url.path == "/v1/connect/oauth2/authorize"
+    q = {k: v[0] for k, v in parse_qs(url.query).items()}
+    assert q == {
+        "scope": "cart.basic:write",
+        "response_type": "code",
+        "client_id": "cid",
+        "redirect_uri": "http://localhost:8000/callback",
+    }
+
+
+def test_exchange_code_saves_tokens_with_expiry(client, server, storage, clock):
+    server.queue(200, USER_TOKEN)
+    client.exchange_code("abc123")
+    assert form(server.requests[0]) == {
+        "grant_type": "authorization_code",
+        "code": "abc123",
+        "redirect_uri": "http://localhost:8000/callback",
+    }
+    saved = storage.load_tokens()
+    assert saved["access_token"] == "user-tok"
+    assert saved["refresh_token"] == "refresh-1"
+    assert saved["expires_at"] == clock.now + 1800
+
+
+def test_is_signed_in_reflects_stored_tokens(client, storage):
+    assert client.is_signed_in() is False
+    storage.save_tokens({"access_token": "x", "refresh_token": "y", "expires_at": 0})
+    assert client.is_signed_in() is True
+
+
+def test_user_token_returns_stored_token_when_fresh(client, storage, clock, server):
+    storage.save_tokens({"access_token": "fresh", "refresh_token": "r", "expires_at": clock.now + 600})
+    assert client.user_token() == "fresh"
+    assert server.requests == []
+
+
+def test_user_token_refreshes_when_expired(client, storage, clock, server):
+    storage.save_tokens({"access_token": "old", "refresh_token": "refresh-1", "expires_at": clock.now + 30})
+    server.queue(200, {**USER_TOKEN, "access_token": "new", "refresh_token": "refresh-2"})
+    assert client.user_token() == "new"
+    assert form(server.requests[0]) == {"grant_type": "refresh_token", "refresh_token": "refresh-1"}
+    saved = storage.load_tokens()
+    assert saved["access_token"] == "new"
+    assert saved["refresh_token"] == "refresh-2"
+
+
+def test_user_token_raises_not_signed_in_when_no_tokens(client):
+    with pytest.raises(NotSignedIn):
+        client.user_token()
+
+
+def test_rejected_refresh_clears_tokens_and_raises_not_signed_in(client, storage, clock, server):
+    storage.save_tokens({"access_token": "old", "refresh_token": "dead", "expires_at": clock.now - 1})
+    server.queue(401, {"errors": {"reason": "invalid_grant"}})
+    with pytest.raises(NotSignedIn) as info:
+        client.user_token()
+    assert "invalid_grant" in info.value.message
+    assert storage.load_tokens() is None
+
+
+def test_add_to_cart_sends_pickup_items(client, storage, clock, server):
+    storage.save_tokens({"access_token": "fresh", "refresh_token": "r", "expires_at": clock.now + 600})
+    server.queue(204, None)
+    client.add_to_cart([("0001111041700", 2), ("0001111041701", 1)])
+    req = server.requests[0]
+    assert req.method == "PUT"
+    assert req.url.path == "/v1/cart/add"
+    assert req.headers["Authorization"] == "Bearer fresh"
+    assert json.loads(req.content) == {"items": [
+        {"upc": "0001111041700", "quantity": 2, "modality": "PICKUP"},
+        {"upc": "0001111041701", "quantity": 1, "modality": "PICKUP"},
+    ]}
+
+
+def test_add_to_cart_raises_kroger_error_on_rejection(client, storage, clock, server):
+    storage.save_tokens({"access_token": "fresh", "refresh_token": "r", "expires_at": clock.now + 600})
+    server.queue(400, {"errors": {"reason": "Invalid UPC 0001111041700"}})
+    with pytest.raises(KrogerError) as info:
+        client.add_to_cart([("0001111041700", 1)])
+    assert info.value.message == "Invalid UPC 0001111041700"

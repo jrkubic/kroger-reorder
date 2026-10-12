@@ -126,3 +126,54 @@ class KrogerClient:
                 "price": price.get("promo") or price.get("regular"),
             })
         return results
+
+    # -- user token: OAuth authorization-code flow, needed for the cart ----
+    def authorize_url(self) -> str:
+        query = urlencode({
+            "scope": USER_SCOPE,
+            "response_type": "code",
+            "client_id": self.client_id,
+            "redirect_uri": self.redirect_uri,
+        })
+        return f"{AUTHORIZE_URL}?{query}"
+
+    def exchange_code(self, code: str) -> None:
+        body = self._token_request({
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": self.redirect_uri,
+        })
+        self._store_user_tokens(body)
+
+    def _store_user_tokens(self, body: dict) -> None:
+        self.storage.save_tokens({
+            "access_token": body["access_token"],
+            "refresh_token": body["refresh_token"],
+            "expires_at": self.clock() + body.get("expires_in", 1800),
+        })
+
+    def is_signed_in(self) -> bool:
+        return self.storage.load_tokens() is not None
+
+    def user_token(self) -> str:
+        tokens = self.storage.load_tokens()
+        if not tokens:
+            raise NotSignedIn()
+        if self.clock() < tokens["expires_at"] - EXPIRY_MARGIN_SECONDS:
+            return tokens["access_token"]
+        try:
+            body = self._token_request({"grant_type": "refresh_token", "refresh_token": tokens["refresh_token"]})
+        except KrogerError as exc:
+            self.storage.clear_tokens()
+            raise NotSignedIn(f"Kroger sign-in expired ({exc.message}). Please sign in again.") from exc
+        self._store_user_tokens(body)
+        return body["access_token"]
+
+    def add_to_cart(self, items: list[tuple[str, int]]) -> None:
+        payload = {"items": [{"upc": upc, "quantity": qty, "modality": "PICKUP"} for upc, qty in items]}
+        response = self.http.put(
+            "/cart/add",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.user_token()}"},
+        )
+        self._raise_for_error(response)
