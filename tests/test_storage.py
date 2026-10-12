@@ -47,3 +47,17 @@ def test_tokens_roundtrip_and_clear(tmp_path):
     s.clear_tokens()
     assert s.load_tokens() is None
     s.clear_tokens()  # clearing twice must not raise
+
+
+def test_list_entry_with_bad_fields_is_empty_with_warning(tmp_path):
+    content = '[{"upc": "1", "name": "x", "size": "", "note": "extra"}]'
+    (tmp_path / "list.json").write_text(content, encoding="utf-8")
+    loaded = Storage(tmp_path).load_list()
+    assert loaded.items == []
+    assert "unexpected or missing fields" in loaded.warning
+    assert (tmp_path / "list.json").read_text(encoding="utf-8") == content
+
+
+def test_non_object_config_is_empty(tmp_path):
+    (tmp_path / "config.json").write_text("[1]", encoding="utf-8")
+    assert Storage(tmp_path).load_config() == {}

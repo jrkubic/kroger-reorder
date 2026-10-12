@@ -44,7 +44,10 @@ class Storage:
             raise ValueError(f"{name} is not valid JSON: {exc}") from exc
 
     def _write(self, name: str, value: Any) -> None:
-        self._path(name).write_text(json.dumps(value, indent=2), encoding="utf-8")
+        path = self._path(name)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(value, indent=2), encoding="utf-8")
+        tmp.replace(path)
 
     # -- standard list -----------------------------------------------------
     def load_list(self) -> ListLoad:
@@ -59,7 +62,15 @@ class Storage:
             return ListLoad(items=[])
         if not isinstance(raw, list):
             return ListLoad(items=[], warning="list.json should contain a JSON array. Showing an empty list.")
-        return ListLoad(items=[Item(**entry) for entry in raw])
+        try:
+            items = [Item(**entry) for entry in raw]
+        except TypeError as exc:
+            return ListLoad(
+                items=[],
+                warning=f"list.json has an entry with unexpected or missing fields ({exc}). "
+                "Showing an empty list; the file is untouched until you add an item.",
+            )
+        return ListLoad(items=items)
 
     def save_list(self, items: list[Item]) -> None:
         self._write("list.json", [asdict(i) for i in items])
@@ -67,9 +78,10 @@ class Storage:
     # -- store config ------------------------------------------------------
     def load_config(self) -> dict:
         try:
-            return self._read("config.json") or {}
+            raw = self._read("config.json")
         except ValueError:
             return {}
+        return raw if isinstance(raw, dict) else {}
 
     def save_config(self, config: dict) -> None:
         self._write("config.json", config)
@@ -77,9 +89,10 @@ class Storage:
     # -- OAuth tokens ------------------------------------------------------
     def load_tokens(self) -> dict | None:
         try:
-            return self._read("tokens.json")
+            raw = self._read("tokens.json")
         except ValueError:
             return None
+        return raw if isinstance(raw, dict) else None
 
     def save_tokens(self, tokens: dict) -> None:
         self._write("tokens.json", tokens)
