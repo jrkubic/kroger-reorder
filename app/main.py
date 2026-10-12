@@ -86,4 +86,38 @@ def create_app(storage: Storage, kroger) -> FastAPI:
             return error(400, "Pick a store first.")
         return {"results": kroger.search_products(term, config["store_id"])}
 
+    @app.post("/api/items")
+    def add_item(new: NewItem):
+        items = storage.load_list().items
+        if not any(i.upc == new.upc for i in items):
+            items.append(Item(upc=new.upc, name=new.name, size=new.size))
+            storage.save_list(items)
+        return items_payload()
+
+    @app.put("/api/items")
+    def replace_items(models: list[ItemModel]):
+        storage.save_list([Item(**m.model_dump()) for m in models])
+        return items_payload()
+
+    @app.delete("/api/items/{upc}")
+    def remove_item(upc: str):
+        storage.save_list([i for i in storage.load_list().items if i.upc != upc])
+        return items_payload()
+
+    @app.post("/api/push")
+    def push(models: list[ItemModel]):
+        items = [Item(**m.model_dump()) for m in models]
+        storage.save_list(items)
+        chosen = [i for i in items if i.included and i.quantity > 0]
+        if not chosen:
+            return error(400, "Nothing is checked to send.")
+        try:
+            kroger.add_to_cart([(i.upc, i.quantity) for i in chosen])
+        except NotSignedIn:
+            raise
+        except KrogerError as exc:
+            bad = [i.upc for i in chosen if i.upc in exc.message]
+            return error(502, f"Kroger said: {exc.message}", bad_upcs=bad)
+        return {"added": [asdict(i) for i in chosen]}
+
     return app

@@ -119,3 +119,66 @@ def test_index_serves_html(client):
     r = client.get("/")
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
+
+
+MILK = {"upc": "0001", "name": "Whole Milk", "size": "1 gal"}
+EGGS = {"upc": "0002", "name": "Eggs", "size": "12 ct"}
+
+
+def test_add_item_appends_with_defaults_and_dedupes(client, storage):
+    r = client.post("/api/items", json=MILK)
+    assert r.status_code == 200
+    assert r.json()["items"] == [{**MILK, "quantity": 1, "included": True}]
+    client.post("/api/items", json=MILK)
+    assert len(client.get("/api/state").json()["items"]) == 1
+
+
+def test_replace_items_saves_quantities_and_flags(client, storage):
+    body = [{**MILK, "quantity": 3, "included": False}, {**EGGS, "quantity": 1, "included": True}]
+    r = client.put("/api/items", json=body)
+    assert r.status_code == 200
+    assert r.json()["items"] == body
+    assert storage.load_list().items[0].quantity == 3
+
+
+def test_delete_item(client):
+    client.post("/api/items", json=MILK)
+    client.post("/api/items", json=EGGS)
+    r = client.delete("/api/items/0001")
+    assert [i["upc"] for i in r.json()["items"]] == ["0002"]
+
+
+def test_push_sends_only_included_items_with_positive_quantity(client, kroger, storage):
+    kroger.signed_in = True
+    body = [
+        {**MILK, "quantity": 2, "included": True},
+        {**EGGS, "quantity": 1, "included": False},
+        {"upc": "0003", "name": "Bread", "size": "", "quantity": 0, "included": True},
+    ]
+    r = client.post("/api/push", json=body)
+    assert r.status_code == 200
+    assert kroger.cart_calls == [[("0001", 2)]]
+    assert [i["upc"] for i in r.json()["added"]] == ["0001"]
+    # push also persists the latest edits
+    assert storage.load_list().items[1].included is False
+
+
+def test_push_with_nothing_checked_is_400_and_calls_nothing(client, kroger):
+    r = client.post("/api/push", json=[{**MILK, "quantity": 1, "included": False}])
+    assert r.status_code == 400
+    assert kroger.cart_calls == []
+
+
+def test_push_when_not_signed_in_is_401(client, kroger):
+    kroger.cart_error = NotSignedIn()
+    r = client.post("/api/push", json=[{**MILK, "quantity": 1, "included": True}])
+    assert r.status_code == 401
+    assert r.json()["signed_in"] is False
+
+
+def test_push_kroger_rejection_flags_bad_upc(client, kroger):
+    kroger.cart_error = KrogerError(400, "Invalid UPC 0002")
+    body = [{**MILK, "quantity": 1, "included": True}, {**EGGS, "quantity": 1, "included": True}]
+    r = client.post("/api/push", json=body)
+    assert r.status_code == 502
+    assert r.json() == {"error": "Kroger said: Invalid UPC 0002", "bad_upcs": ["0002"]}
