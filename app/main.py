@@ -47,11 +47,13 @@ def create_app(storage: Storage, kroger) -> FastAPI:
     async def not_signed_in(_: Request, exc: NotSignedIn):
         return error(401, exc.message, signed_in=False)
 
+    def kroger_message(exc: KrogerError) -> str:
+        # status 0 is a transport failure: Kroger never answered, so there is nothing to quote.
+        return exc.message if exc.status == 0 else f"Kroger said: {exc.message}"
+
     @app.exception_handler(KrogerError)
     async def kroger_error(_: Request, exc: KrogerError):
-        if exc.status == 0:  # transport failure: Kroger never answered, so nothing to quote
-            return error(502, exc.message)
-        return error(502, f"Kroger said: {exc.message}")
+        return error(502, kroger_message(exc))
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, exc: RequestValidationError):
@@ -139,7 +141,7 @@ def create_app(storage: Storage, kroger) -> FastAPI:
         except KrogerError as exc:
             # Whole-token match so "1111041" is not flagged when Kroger rejects "0001111041700".
             bad = [i.upc for i in chosen if re.search(rf"(?<!\d){re.escape(i.upc)}(?!\d)", exc.message)]
-            return error(502, f"Kroger said: {exc.message}", bad_upcs=bad)
+            return error(502, kroger_message(exc), bad_upcs=bad)
         return {"added": [asdict(i) for i in chosen]}
 
     return app
