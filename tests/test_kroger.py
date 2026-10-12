@@ -14,14 +14,16 @@ class FakeKrogerServer:
 
     def __init__(self):
         self.requests: list[httpx.Request] = []
-        self.responses: list[tuple[int, dict | None]] = []
+        self.responses: list[tuple[int, dict | None, str | None]] = []
 
-    def queue(self, status: int, body: dict | None = None) -> None:
-        self.responses.append((status, body))
+    def queue(self, status: int, body: dict | None = None, text: str | None = None) -> None:
+        self.responses.append((status, body, text))
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        status, body = self.responses.pop(0)
+        status, body, text = self.responses.pop(0)
+        if text is not None:
+            return httpx.Response(status, text=text)
         return httpx.Response(status) if body is None else httpx.Response(status, json=body)
 
 
@@ -146,6 +148,33 @@ def test_kroger_error_falls_back_to_status_when_body_is_not_json(client, server)
     assert "503" in info.value.message
 
 
+def test_html_error_body_is_summarised_as_status(client, server):
+    server.queue(200, TOKEN)
+    server.queue(502, text="<html><body><h1>502 Bad Gateway</h1></body></html>")
+    with pytest.raises(KrogerError) as info:
+        client.find_stores("45209")
+    assert info.value.status == 502
+    assert info.value.message == "HTTP 502"
+
+
+def test_network_error_becomes_kroger_error(clock, storage):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom")
+
+    client = KrogerClient(
+        client_id="cid",
+        client_secret="secret",
+        redirect_uri="http://localhost:8000/callback",
+        storage=storage,
+        transport=httpx.MockTransport(handler),
+        clock=clock,
+    )
+    with pytest.raises(KrogerError) as info:
+        client.find_stores("45209")
+    assert "Could not reach Kroger" in info.value.message
+    assert "ConnectError" in info.value.message
+
+
 USER_TOKEN = {"access_token": "user-tok", "refresh_token": "refresh-1", "expires_in": 1800, "token_type": "bearer"}
 
 
@@ -211,6 +240,16 @@ def test_rejected_refresh_clears_tokens_and_raises_not_signed_in(client, storage
         client.user_token()
     assert "invalid_grant" in info.value.message
     assert storage.load_tokens() is None
+
+
+def test_transient_refresh_failure_keeps_tokens(client, storage, clock, server):
+    storage.save_tokens({"access_token": "old", "refresh_token": "refresh-1", "expires_at": clock.now - 1})
+    server.queue(503, None)
+    with pytest.raises(KrogerError) as info:
+        client.user_token()
+    assert not isinstance(info.value, NotSignedIn)
+    assert info.value.status == 503
+    assert storage.load_tokens() is not None
 
 
 def test_add_to_cart_sends_pickup_items(client, storage, clock, server):

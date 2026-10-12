@@ -64,7 +64,10 @@ class KrogerClient:
         if response.is_success:
             return
         text = response.text.strip()
-        message = text[:200] if text and len(text) <= 200 else f"HTTP {response.status_code}"
+        if not text or text.startswith("<"):  # empty or HTML error page: not worth showing
+            message = f"HTTP {response.status_code}"
+        else:
+            message = text[:200]
         try:
             body = response.json()
             errors = body.get("errors", body)
@@ -75,8 +78,16 @@ class KrogerClient:
             pass
         raise KrogerError(response.status_code, message)
 
+    def _send(self, method: str, path: str, **kwargs) -> httpx.Response:
+        """One place where transport failures (DNS, refused, timeout) become KrogerError."""
+        try:
+            return self.http.request(method, path, **kwargs)
+        except httpx.HTTPError as exc:
+            raise KrogerError(0, f"Could not reach Kroger: {exc.__class__.__name__}") from exc
+
     def _token_request(self, form: dict) -> dict:
-        response = self.http.post(
+        response = self._send(
+            "POST",
             TOKEN_PATH,
             data=form,
             headers={"Authorization": self._basic_auth()},
@@ -85,7 +96,7 @@ class KrogerClient:
         return response.json()
 
     def _get(self, path: str, token: str, params: dict) -> dict:
-        response = self.http.get(path, params=params, headers={"Authorization": f"Bearer {token}"})
+        response = self._send("GET", path, params=params, headers={"Authorization": f"Bearer {token}"})
         self._raise_for_error(response)
         return response.json()
 
@@ -173,6 +184,8 @@ class KrogerClient:
         try:
             body = self._token_request({"grant_type": "refresh_token", "refresh_token": refresh})
         except KrogerError as exc:
+            if exc.status not in (400, 401):
+                raise  # transient (5xx, network): keep the tokens and let the caller retry later
             self.storage.clear_tokens()
             raise NotSignedIn(f"Kroger sign-in expired ({exc.message}). Please sign in again.") from exc
         self._store_user_tokens(body, fallback_refresh=refresh)
@@ -180,7 +193,8 @@ class KrogerClient:
 
     def add_to_cart(self, items: list[tuple[str, int]]) -> None:
         payload = {"items": [{"upc": upc, "quantity": qty, "modality": "PICKUP"} for upc, qty in items]}
-        response = self.http.put(
+        response = self._send(
+            "PUT",
             "/cart/add",
             json=payload,
             headers={"Authorization": f"Bearer {self.user_token()}"},
