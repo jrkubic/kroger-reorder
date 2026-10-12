@@ -118,6 +118,18 @@ def test_kroger_error_becomes_502_with_message(client, storage, kroger):
     assert r.json() == {"error": "Kroger said: rate limited"}
 
 
+def test_transport_error_is_502_without_kroger_said_prefix(client, storage, kroger):
+    storage.save_config({"store_id": "01400943", "store_name": "x"})
+
+    def boom(term, location_id):
+        raise KrogerError(0, "Could not reach Kroger: ConnectError")
+
+    kroger.search_products = boom
+    r = client.get("/api/search", params={"term": "milk"})
+    assert r.status_code == 502
+    assert r.json() == {"error": "Could not reach Kroger: ConnectError"}
+
+
 def test_index_serves_html(client):
     r = client.get("/")
     assert r.status_code == 200

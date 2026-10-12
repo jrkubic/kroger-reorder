@@ -31,7 +31,7 @@ class Storage:
     def __init__(self, data_dir: Path = DATA_DIR) -> None:
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # re-entrant: save_list -> load_list -> _read
 
     # -- generic helpers ----------------------------------------------------
     def _path(self, name: str) -> Path:
@@ -40,12 +40,13 @@ class Storage:
     def _read(self, name: str) -> Any | None:
         """Parsed JSON, or None if the file is missing. Raises ValueError if corrupt."""
         path = self._path(name)
-        if not path.exists():
-            return None
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{name} is not valid JSON: {exc}") from exc
+        with self._lock:  # on Windows, replace() fails while another thread has the file open
+            if not path.exists():
+                return None
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{name} is not valid JSON: {exc}") from exc
 
     def _write(self, name: str, value: Any) -> None:
         path = self._path(name)
@@ -87,17 +88,18 @@ class Storage:
         return ListLoad(items=items)
 
     def save_list(self, items: list[Item]) -> None:
-        self._backup_if_corrupt("list.json")
-        self._write("list.json", [asdict(i) for i in items])
+        with self._lock:
+            # Any load warning means the file holds something we could not fully read;
+            # move it aside rather than overwrite it.
+            if self.load_list().warning and self._path("list.json").exists():
+                self._backup("list.json")
+            self._write("list.json", [asdict(i) for i in items])
 
-    def _backup_if_corrupt(self, name: str) -> None:
-        """Move an unparseable file aside as <name>.corrupt-<timestamp> so it is never overwritten."""
-        try:
-            self._read(name)
-        except ValueError:
-            path = self._path(name)
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            path.replace(path.with_name(f"{name}.corrupt-{stamp}"))
+    def _backup(self, name: str) -> None:
+        """Rename <name> to <name>.corrupt-<timestamp>."""
+        path = self._path(name)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        path.replace(path.with_name(f"{name}.corrupt-{stamp}"))
 
     # -- store config ------------------------------------------------------
     def load_config(self) -> dict:

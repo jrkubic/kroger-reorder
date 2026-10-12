@@ -49,6 +49,8 @@ def create_app(storage: Storage, kroger) -> FastAPI:
 
     @app.exception_handler(KrogerError)
     async def kroger_error(_: Request, exc: KrogerError):
+        if exc.status == 0:  # transport failure: Kroger never answered, so nothing to quote
+            return error(502, exc.message)
         return error(502, f"Kroger said: {exc.message}")
 
     @app.exception_handler(RequestValidationError)

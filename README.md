@@ -48,7 +48,7 @@ To add an item to the standard list, search for it in the **Add an item** box an
 Everything is plain JSON in `data/` (gitignored):
 
 - `list.json` - your standard list. Safe to edit by hand.
-  If `list.json` ever becomes unreadable, the app shows a warning and moves the broken file aside as `list.json.corrupt-<timestamp>` the next time you add an item.
+  If `list.json` ever becomes unreadable or malformed, the app shows a warning and moves the broken file aside as `list.json.corrupt-<timestamp>` the next time you add an item.
 - `config.json` - chosen store.
 - `tokens.json` - Kroger sign-in tokens. Delete this file to sign out.
 

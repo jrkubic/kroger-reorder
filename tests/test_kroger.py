@@ -212,6 +212,16 @@ def test_exchange_code_saves_tokens_with_expiry(client, server, storage, clock):
     assert saved["expires_at"] == clock.now + 1800
 
 
+def test_exchange_code_rejects_replayed_state(client, server):
+    server.queue(200, USER_TOKEN)
+    state = state_from(client.authorize_url())
+    client.exchange_code("abc123", state)
+    sent = len(server.requests)
+    with pytest.raises(KrogerError):
+        client.exchange_code("abc123", state)
+    assert len(server.requests) == sent
+
+
 def test_exchange_code_rejects_wrong_state(client, server, storage):
     client.authorize_url()
     with pytest.raises(KrogerError) as info:

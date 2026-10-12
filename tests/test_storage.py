@@ -102,3 +102,44 @@ def test_save_list_backs_up_corrupt_file(tmp_path):
     assert len(backups) == 1
     assert backups[0].read_text(encoding="utf-8") == "{not json"
     assert s.load_list().items == [Item(upc="0001", name="Milk", size="1 gal")]
+
+
+def test_save_list_backs_up_malformed_entries(tmp_path):
+    old = '[{"upc_code": "999", "name": "Old"}]'
+    (tmp_path / "list.json").write_text(old, encoding="utf-8")
+    s = Storage(tmp_path)
+    s.save_list([Item(upc="0001", name="Milk", size="1 gal")])
+    backups = list(tmp_path.glob("list.json.corrupt-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == old
+    assert s.load_list().items == [Item(upc="0001", name="Milk", size="1 gal")]
+
+
+def test_concurrent_reads_and_writes_do_not_crash(tmp_path):
+    import threading
+
+    s = Storage(tmp_path)
+    s.save_config({"n": -1})
+    failures: list[BaseException] = []
+
+    def reader() -> None:
+        try:
+            for _ in range(50):
+                assert isinstance(s.load_config(), dict)
+        except BaseException as exc:  # noqa: BLE001
+            failures.append(exc)
+
+    def writer() -> None:
+        try:
+            for i in range(50):
+                s.save_config({"n": i})
+        except BaseException as exc:  # noqa: BLE001
+            failures.append(exc)
+
+    threads = [threading.Thread(target=reader) for _ in range(3)] + [threading.Thread(target=writer)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert failures == []
+    assert s.load_config() == {"n": 49}
