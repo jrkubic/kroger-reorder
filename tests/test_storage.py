@@ -69,3 +69,36 @@ def test_list_entry_with_bad_fields_is_empty_with_warning(tmp_path):
 def test_non_object_config_is_empty(tmp_path):
     (tmp_path / "config.json").write_text("[1]", encoding="utf-8")
     assert Storage(tmp_path).load_config() == {}
+
+
+def test_concurrent_writes_do_not_crash(tmp_path):
+    import threading
+
+    s = Storage(tmp_path)
+    written = [{"n": i} for i in range(8)]
+    failures: list[BaseException] = []
+
+    def save(cfg: dict) -> None:
+        try:
+            s.save_config(cfg)
+        except BaseException as exc:  # noqa: BLE001 - surface anything a worker hit
+            failures.append(exc)
+
+    threads = [threading.Thread(target=save, args=(cfg,)) for cfg in written]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert failures == []
+    assert s.load_config() in written
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_save_list_backs_up_corrupt_file(tmp_path):
+    (tmp_path / "list.json").write_text("{not json", encoding="utf-8")
+    s = Storage(tmp_path)
+    s.save_list([Item(upc="0001", name="Milk", size="1 gal")])
+    backups = list(tmp_path.glob("list.json.corrupt-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == "{not json"
+    assert s.load_list().items == [Item(upc="0001", name="Milk", size="1 gal")]

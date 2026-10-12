@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +31,7 @@ class Storage:
     def __init__(self, data_dir: Path = DATA_DIR) -> None:
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
 
     # -- generic helpers ----------------------------------------------------
     def _path(self, name: str) -> Path:
@@ -45,9 +49,10 @@ class Storage:
 
     def _write(self, name: str, value: Any) -> None:
         path = self._path(name)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(value, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        with self._lock:
+            tmp.write_text(json.dumps(value, indent=2), encoding="utf-8")
+            tmp.replace(path)
 
     # -- standard list -----------------------------------------------------
     def load_list(self) -> ListLoad:
@@ -82,7 +87,17 @@ class Storage:
         return ListLoad(items=items)
 
     def save_list(self, items: list[Item]) -> None:
+        self._backup_if_corrupt("list.json")
         self._write("list.json", [asdict(i) for i in items])
+
+    def _backup_if_corrupt(self, name: str) -> None:
+        """Move an unparseable file aside as <name>.corrupt-<timestamp> so it is never overwritten."""
+        try:
+            self._read(name)
+        except ValueError:
+            path = self._path(name)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            path.replace(path.with_name(f"{name}.corrupt-{stamp}"))
 
     # -- store config ------------------------------------------------------
     def load_config(self) -> dict:
