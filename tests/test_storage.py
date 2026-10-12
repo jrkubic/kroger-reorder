@@ -49,8 +49,16 @@ def test_tokens_roundtrip_and_clear(tmp_path):
     s.clear_tokens()  # clearing twice must not raise
 
 
+def test_list_coerces_quantity_string(tmp_path):
+    content = '[{"upc": "1", "name": "x", "size": "", "quantity": "2"}]'
+    (tmp_path / "list.json").write_text(content, encoding="utf-8")
+    loaded = Storage(tmp_path).load_list()
+    assert loaded.items == [Item(upc="1", name="x", size="", quantity=2, included=True)]
+    assert loaded.warning is None
+
+
 def test_list_entry_with_bad_fields_is_empty_with_warning(tmp_path):
-    content = '[{"upc": "1", "name": "x", "size": "", "note": "extra"}]'
+    content = '[{"upc": "1", "name": "x", "size": "", "quantity": "two"}]'
     (tmp_path / "list.json").write_text(content, encoding="utf-8")
     loaded = Storage(tmp_path).load_list()
     assert loaded.items == []

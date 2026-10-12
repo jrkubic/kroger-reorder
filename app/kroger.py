@@ -68,7 +68,9 @@ class KrogerClient:
         try:
             body = response.json()
             errors = body.get("errors", body)
-            message = str(errors.get("reason") or errors.get("message") or message)
+            message = str(
+                errors.get("reason") or errors.get("message") or errors.get("error_description") or message
+            )
         except (ValueError, AttributeError):
             pass
         raise KrogerError(response.status_code, message)

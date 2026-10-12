@@ -63,8 +63,17 @@ class Storage:
         if not isinstance(raw, list):
             return ListLoad(items=[], warning="list.json should contain a JSON array. Showing an empty list.")
         try:
-            items = [Item(**entry) for entry in raw]
-        except TypeError as exc:
+            items = [
+                Item(
+                    upc=str(e["upc"]),
+                    name=str(e.get("name", "")),
+                    size=str(e.get("size", "")),
+                    quantity=int(e.get("quantity", 1)),
+                    included=bool(e.get("included", True)),
+                )
+                for e in raw
+            ]
+        except (TypeError, ValueError, KeyError) as exc:
             return ListLoad(
                 items=[],
                 warning=f"list.json has an entry with unexpected or missing fields ({exc}). "

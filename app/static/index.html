@@ -126,6 +126,7 @@ function render() {
   $('push').disabled = !setupDone || !state.items.some(i => i.included);
 
   const ul = $('items');
+  const active = document.activeElement?.dataset || {};
   ul.innerHTML = '';
   state.items.forEach((item, idx) => {
     const li = document.createElement('li');
@@ -137,6 +138,9 @@ function render() {
       <button class="danger" data-remove="${esc(item.upc)}" title="Remove">&#x2715;</button>`;
     ul.appendChild(li);
   });
+  if (active.idx !== undefined) {
+    ul.querySelector(`[data-idx="${active.idx}"][data-field="${active.field}"]`)?.focus();
+  }
   $('empty').classList.toggle('hidden', state.items.length > 0);
 }
 
@@ -149,12 +153,15 @@ async function load() {
     render();
     if (authError) banner('error', `Kroger sign-in failed: ${authError}`);
     else if (state.warning) banner('warn', state.warning);
-  } catch (e) { banner('error', e.message); }
+  } catch (e) { banner('error', e.message); render(); }
 }
 
 async function saveItems() {
-  try { const data = await api('PUT', '/api/items', cleanItems()); state.items = data.items; }
-  catch (e) { banner('error', e.message); }
+  try {
+    const data = await api('PUT', '/api/items', cleanItems());
+    const bad = new Set(state.items.filter(i => i.bad).map(i => i.upc));
+    state.items = data.items.map(i => ({ ...i, bad: bad.has(i.upc) }));
+  } catch (e) { banner('error', e.message); }
 }
 
 $('find-stores').onclick = async () => {
@@ -229,8 +236,7 @@ $('push').onclick = async () => {
   try {
     const { added } = await api('POST', '/api/push', cleanItems());
     state.items.forEach(i => delete i.bad);
-    const n = added.length;
-    banner('ok', `Added ${n} item${n === 1 ? '' : 's'} to your Kroger cart. ` +
+    banner('ok', `Added to your Kroger cart: ${added.map(i => esc(i.name)).join(', ')}. ` +
       `Finish checkout at <a href="https://www.kroger.com/cart" target="_blank" rel="noopener">kroger.com/cart</a> or in the Kroger app.`, true);
   } catch (e) {
     const bad = (e.data && e.data.bad_upcs) || [];

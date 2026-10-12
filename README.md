@@ -7,13 +7,15 @@ A tiny local web page that pushes your saved "standard" grocery list into your K
 ### 1. Register a Kroger developer app (free, ~5 minutes)
 
 1. Go to https://developer.kroger.com and sign in with your regular Kroger account.
-2. Open **My Apps** -> **Register App**.
+2. Open **My Apps**, then create a new app.
 3. Name it anything (e.g. `kroger-reorder`).
 4. Under **Redirect URL**, enter exactly: `http://localhost:8000/callback`
-5. Request the **Products**, **Locations**, and **Cart** APIs.
+5. Make sure the app has access to the public **Products**, **Locations**, and **Cart** APIs. If the portal doesn't ask, they're included by default.
 6. Save, then copy the **Client ID** and **Client Secret**.
 
 ### 2. Install
+
+Requires Python 3.12 or newer.
 
 ```powershell
 cd C:\Projects\kroger-reorder
@@ -56,6 +58,7 @@ Everything is plain JSON in `data/` (gitignored):
 - **Sign-in button came back** - Kroger rejected the refresh token. Just sign in again; your list is untouched.
 - **An item is highlighted red after Send** - Kroger rejected that UPC (often discontinued). Remove it and search for a replacement.
 - **"Kroger said: ..."** - the raw message from Kroger's API. If it mentions rate limits, wait a minute.
+- **"Port 8000 is already in use"** - another copy is running, or something else owns the port. Close it, or set `PORT` in `.env` and update the redirect URL on your Kroger app to match.
 
 ## Development
 
