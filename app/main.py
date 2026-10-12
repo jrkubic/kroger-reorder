@@ -83,11 +83,11 @@ def create_app(storage: Storage, kroger) -> FastAPI:
         return RedirectResponse(kroger.authorize_url())
 
     @app.get("/callback")
-    def callback(code: str | None = None, error: str | None = None):
+    def callback(code: str | None = None, state: str | None = None, error: str | None = None):
         if error or not code:
             return RedirectResponse(f"/?auth_error={quote(error or 'no code returned')}")
         try:
-            kroger.exchange_code(code)
+            kroger.exchange_code(code, state)
         except KrogerError as exc:
             return RedirectResponse(f"/?auth_error={quote(exc.message)}")
         return RedirectResponse("/")

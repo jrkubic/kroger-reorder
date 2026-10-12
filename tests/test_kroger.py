@@ -184,6 +184,7 @@ def test_authorize_url_has_scope_and_redirect(client):
     assert url.netloc == "api.kroger.com"
     assert url.path == "/v1/connect/oauth2/authorize"
     q = {k: v[0] for k, v in parse_qs(url.query).items()}
+    assert q.pop("state")  # present and non-empty; value is random per call
     assert q == {
         "scope": "cart.basic:write",
         "response_type": "code",
@@ -192,9 +193,14 @@ def test_authorize_url_has_scope_and_redirect(client):
     }
 
 
+def state_from(url: str) -> str:
+    return parse_qs(urlparse(url).query)["state"][0]
+
+
 def test_exchange_code_saves_tokens_with_expiry(client, server, storage, clock):
     server.queue(200, USER_TOKEN)
-    client.exchange_code("abc123")
+    state = state_from(client.authorize_url())
+    client.exchange_code("abc123", state)
     assert form(server.requests[0]) == {
         "grant_type": "authorization_code",
         "code": "abc123",
@@ -204,6 +210,22 @@ def test_exchange_code_saves_tokens_with_expiry(client, server, storage, clock):
     assert saved["access_token"] == "user-tok"
     assert saved["refresh_token"] == "refresh-1"
     assert saved["expires_at"] == clock.now + 1800
+
+
+def test_exchange_code_rejects_wrong_state(client, server, storage):
+    client.authorize_url()
+    with pytest.raises(KrogerError) as info:
+        client.exchange_code("abc123", "not-the-state")
+    assert info.value.status == 400
+    assert "state" in info.value.message.lower()
+    assert server.requests == []
+    assert storage.load_tokens() is None
+
+
+def test_exchange_code_rejects_when_no_sign_in_was_started(client, server):
+    with pytest.raises(KrogerError):
+        client.exchange_code("abc123", "anything")
+    assert server.requests == []
 
 
 def test_is_signed_in_reflects_stored_tokens(client, storage):

@@ -10,6 +10,7 @@ class FakeKroger:
     def __init__(self):
         self.signed_in = False
         self.exchanged_code = None
+        self.exchanged_state = None
         self.cart_calls = []
         self.cart_error: Exception | None = None
 
@@ -25,8 +26,9 @@ class FakeKroger:
     def authorize_url(self):
         return "https://api.kroger.com/v1/connect/oauth2/authorize?fake=1"
 
-    def exchange_code(self, code):
+    def exchange_code(self, code, state):
         self.exchanged_code = code
+        self.exchanged_state = state
         self.signed_in = True
 
     def add_to_cart(self, items):
@@ -83,10 +85,11 @@ def test_login_redirects_to_kroger(client):
 
 
 def test_callback_exchanges_code_and_redirects_home(client, kroger):
-    r = client.get("/callback", params={"code": "abc"})
+    r = client.get("/callback", params={"code": "abc", "state": "s"})
     assert r.status_code in (302, 307)
     assert r.headers["location"] == "/"
     assert kroger.exchanged_code == "abc"
+    assert kroger.exchanged_state == "s"
     assert client.get("/api/state").json()["signed_in"] is True
 
 
@@ -196,7 +199,7 @@ def test_callback_denied_redirects_home_with_error(client, kroger):
 
 
 def test_callback_exchange_failure_redirects_home_with_error(client, kroger):
-    def boom(code):
+    def boom(code, state):
         raise KrogerError(400, "invalid_grant")
 
     kroger.exchange_code = boom

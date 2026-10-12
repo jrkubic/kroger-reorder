@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import secrets
 import time
 from typing import Callable
 from urllib.parse import urlencode
@@ -53,6 +54,7 @@ class KrogerClient:
         self.http = httpx.Client(base_url=BASE_URL, transport=transport, timeout=20.0)
         self._app_token: str | None = None
         self._app_token_expires_at: float = 0.0
+        self._pending_state: str | None = None  # CSRF guard for the OAuth redirect
 
     # -- low-level helpers -------------------------------------------------
     def _basic_auth(self) -> str:
@@ -143,15 +145,20 @@ class KrogerClient:
 
     # -- user token: OAuth authorization-code flow, needed for the cart ----
     def authorize_url(self) -> str:
+        self._pending_state = secrets.token_urlsafe(16)
         query = urlencode({
             "scope": USER_SCOPE,
             "response_type": "code",
             "client_id": self.client_id,
             "redirect_uri": self.redirect_uri,
+            "state": self._pending_state,
         })
         return f"{AUTHORIZE_URL}?{query}"
 
-    def exchange_code(self, code: str) -> None:
+    def exchange_code(self, code: str, state: str | None) -> None:
+        if self._pending_state is None or state != self._pending_state:
+            raise KrogerError(400, "Sign-in state mismatch; please try signing in again.")
+        self._pending_state = None
         body = self._token_request({
             "grant_type": "authorization_code",
             "code": code,
