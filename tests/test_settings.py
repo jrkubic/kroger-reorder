@@ -31,3 +31,9 @@ def test_custom_port_changes_redirect_uri():
     s = load_settings(env={"KROGER_CLIENT_ID": "cid", "KROGER_CLIENT_SECRET": "sec", "PORT": "9100"})
     assert s.port == 9100
     assert s.redirect_uri == "http://localhost:9100/callback"
+
+
+def test_non_numeric_port_exits_with_message():
+    with pytest.raises(SystemExit) as info:
+        load_settings(env={"KROGER_CLIENT_ID": "cid", "KROGER_CLIENT_SECRET": "sec", "PORT": "abc"})
+    assert str(info.value) == "PORT must be a number, got 'abc'."

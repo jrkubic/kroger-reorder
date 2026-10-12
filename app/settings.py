@@ -33,8 +33,13 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
             f"Missing {', '.join(missing)}.\n"
             "Copy .env.example to .env and fill in the values from your app at https://developer.kroger.com."
         )
+    raw_port = env.get("PORT") or "8000"
+    try:
+        port = int(raw_port)
+    except ValueError:
+        sys.exit(f"PORT must be a number, got '{raw_port}'.")
     return Settings(
         client_id=env["KROGER_CLIENT_ID"],
         client_secret=env["KROGER_CLIENT_SECRET"],
-        port=int(env.get("PORT") or 8000),
+        port=port,
     )

@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
@@ -48,6 +50,12 @@ def create_app(storage: Storage, kroger) -> FastAPI:
     def error(status: int, message: str, **extra) -> JSONResponse:
         return JSONResponse(status_code=status, content={"error": message, **extra})
 
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(_: Request, exc: RequestValidationError):
+        first = exc.errors()[0] if exc.errors() else {}
+        loc = ".".join(str(p) for p in first.get("loc", []) if p != "body")
+        return error(422, f"Invalid request: {loc or 'body'} {first.get('msg', '')}".strip())
+
     def items_payload() -> dict:
         loaded = storage.load_list()
         return {"items": [asdict(i) for i in loaded.items], "warning": loaded.warning}
@@ -75,8 +83,13 @@ def create_app(storage: Storage, kroger) -> FastAPI:
         return RedirectResponse(kroger.authorize_url())
 
     @app.get("/callback")
-    def callback(code: str):
-        kroger.exchange_code(code)
+    def callback(code: str | None = None, error: str | None = None):
+        if error or not code:
+            return RedirectResponse(f"/?auth_error={quote(error or 'no code returned')}")
+        try:
+            kroger.exchange_code(code)
+        except KrogerError as exc:
+            return RedirectResponse(f"/?auth_error={quote(exc.message)}")
         return RedirectResponse("/")
 
     @app.get("/api/search")
@@ -96,18 +109,23 @@ def create_app(storage: Storage, kroger) -> FastAPI:
 
     @app.put("/api/items")
     def replace_items(models: list[ItemModel]):
-        storage.save_list([Item(**m.model_dump()) for m in models])
+        if models:
+            storage.save_list([Item(**m.model_dump()) for m in models])
         return items_payload()
 
     @app.delete("/api/items/{upc}")
     def remove_item(upc: str):
-        storage.save_list([i for i in storage.load_list().items if i.upc != upc])
+        items = storage.load_list().items
+        kept = [i for i in items if i.upc != upc]
+        if len(kept) != len(items):
+            storage.save_list(kept)
         return items_payload()
 
     @app.post("/api/push")
     def push(models: list[ItemModel]):
         items = [Item(**m.model_dump()) for m in models]
-        storage.save_list(items)
+        if models:
+            storage.save_list(items)
         chosen = [i for i in items if i.included and i.quantity > 0]
         if not chosen:
             return error(400, "Nothing is checked to send.")

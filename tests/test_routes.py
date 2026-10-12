@@ -176,9 +176,51 @@ def test_push_when_not_signed_in_is_401(client, kroger):
     assert r.json()["signed_in"] is False
 
 
-def test_push_kroger_rejection_flags_bad_upc(client, kroger):
+def test_push_kroger_rejection_flags_bad_upc(client, kroger, storage):
     kroger.cart_error = KrogerError(400, "Invalid UPC 0002")
     body = [{**MILK, "quantity": 1, "included": True}, {**EGGS, "quantity": 1, "included": True}]
     r = client.post("/api/push", json=body)
     assert r.status_code == 502
     assert r.json() == {"error": "Kroger said: Invalid UPC 0002", "bad_upcs": ["0002"]}
+    # edits survive a Kroger failure
+    saved = storage.load_list().items
+    assert [i.upc for i in saved] == ["0001", "0002"]
+    assert all(i.included is True for i in saved)
+
+
+def test_callback_denied_redirects_home_with_error(client, kroger):
+    r = client.get("/callback", params={"error": "access_denied"})
+    assert r.status_code in (302, 307)
+    assert r.headers["location"] == "/?auth_error=access_denied"
+    assert kroger.exchanged_code is None
+
+
+def test_callback_exchange_failure_redirects_home_with_error(client, kroger):
+    def boom(code):
+        raise KrogerError(400, "invalid_grant")
+
+    kroger.exchange_code = boom
+    r = client.get("/callback", params={"code": "x"})
+    assert r.status_code in (302, 307)
+    assert r.headers["location"] == "/?auth_error=invalid_grant"
+
+
+def test_push_empty_body_does_not_touch_corrupt_list(client, tmp_path):
+    (tmp_path / "list.json").write_text("nope", encoding="utf-8")
+    r = client.post("/api/push", json=[])
+    assert r.status_code == 400
+    assert (tmp_path / "list.json").read_text(encoding="utf-8") == "nope"
+
+
+def test_delete_missing_upc_leaves_list_unchanged(client):
+    client.post("/api/items", json=MILK)
+    r = client.delete("/api/items/9999")
+    assert r.status_code == 200
+    assert r.json()["items"] == [{**MILK, "quantity": 1, "included": True}]
+
+
+def test_validation_error_uses_error_shape(client):
+    r = client.post("/api/items", json={"upc": "1"})
+    assert r.status_code == 422
+    assert "error" in r.json()
+    assert "name" in r.json()["error"]
