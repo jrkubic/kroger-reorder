@@ -63,11 +63,12 @@ class KrogerClient:
     def _raise_for_error(response: httpx.Response) -> None:
         if response.is_success:
             return
-        message = response.text or f"HTTP {response.status_code}"
+        text = response.text.strip()
+        message = text[:200] if text and len(text) <= 200 else f"HTTP {response.status_code}"
         try:
             body = response.json()
             errors = body.get("errors", body)
-            message = errors.get("reason") or errors.get("message") or message
+            message = str(errors.get("reason") or errors.get("message") or message)
         except (ValueError, AttributeError):
             pass
         raise KrogerError(response.status_code, message)
@@ -145,10 +146,10 @@ class KrogerClient:
         })
         self._store_user_tokens(body)
 
-    def _store_user_tokens(self, body: dict) -> None:
+    def _store_user_tokens(self, body: dict, fallback_refresh: str | None = None) -> None:
         self.storage.save_tokens({
             "access_token": body["access_token"],
-            "refresh_token": body["refresh_token"],
+            "refresh_token": body.get("refresh_token") or fallback_refresh,
             "expires_at": self.clock() + body.get("expires_in", 1800),
         })
 
@@ -159,14 +160,20 @@ class KrogerClient:
         tokens = self.storage.load_tokens()
         if not tokens:
             raise NotSignedIn()
-        if self.clock() < tokens["expires_at"] - EXPIRY_MARGIN_SECONDS:
-            return tokens["access_token"]
         try:
-            body = self._token_request({"grant_type": "refresh_token", "refresh_token": tokens["refresh_token"]})
+            expires_at = float(tokens["expires_at"])
+            access, refresh = tokens["access_token"], tokens["refresh_token"]
+        except (KeyError, TypeError, ValueError):
+            self.storage.clear_tokens()
+            raise NotSignedIn("Stored Kroger sign-in is unreadable. Please sign in again.")
+        if self.clock() < expires_at - EXPIRY_MARGIN_SECONDS:
+            return access
+        try:
+            body = self._token_request({"grant_type": "refresh_token", "refresh_token": refresh})
         except KrogerError as exc:
             self.storage.clear_tokens()
             raise NotSignedIn(f"Kroger sign-in expired ({exc.message}). Please sign in again.") from exc
-        self._store_user_tokens(body)
+        self._store_user_tokens(body, fallback_refresh=refresh)
         return body["access_token"]
 
     def add_to_cart(self, items: list[tuple[str, int]]) -> None:

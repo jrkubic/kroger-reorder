@@ -233,3 +233,26 @@ def test_add_to_cart_raises_kroger_error_on_rejection(client, storage, clock, se
     with pytest.raises(KrogerError) as info:
         client.add_to_cart([("0001111041700", 1)])
     assert info.value.message == "Invalid UPC 0001111041700"
+
+
+def test_refresh_without_new_refresh_token_keeps_old_one(client, storage, clock, server):
+    storage.save_tokens({"access_token": "old", "refresh_token": "refresh-1", "expires_at": clock.now - 1})
+    server.queue(200, {"access_token": "new", "expires_in": 1800})
+    assert client.user_token() == "new"
+    assert storage.load_tokens()["refresh_token"] == "refresh-1"
+
+
+def test_malformed_tokens_clear_and_raise_not_signed_in(client, storage):
+    storage.save_tokens({"access_token": "a", "refresh_token": "r"})
+    with pytest.raises(NotSignedIn):
+        client.user_token()
+    assert storage.load_tokens() is None
+
+
+def test_add_to_cart_refreshes_expired_token_first(client, storage, clock, server):
+    storage.save_tokens({"access_token": "old", "refresh_token": "refresh-1", "expires_at": clock.now - 1})
+    server.queue(200, {**USER_TOKEN, "access_token": "new"})
+    server.queue(204, None)
+    client.add_to_cart([("0001", 1)])
+    assert len(server.requests) == 2
+    assert server.requests[1].headers["Authorization"] == "Bearer new"
