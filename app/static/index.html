@@ -17,14 +17,16 @@
   .banner.error { display:block; background:#fde8e6; color:var(--danger); }
   .banner.ok { display:block; background:#e4f5ea; color:var(--ok); }
   .banner.warn { display:block; background:#fff4d6; color:#7a5300; }
-  input[type=text], input[type=number] { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:8px; }
+  input[type=text], input[type=number], select, textarea { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); }
   input[type=number] { width:64px; }
+  textarea { width:100%; margin:8px 0; resize:vertical; }
   button { font:inherit; padding:8px 14px; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; }
   button.secondary { background:#eceeea; color:var(--ink); }
   button.danger { background:transparent; color:var(--danger); padding:4px 8px; }
   button:disabled { opacity:.5; cursor:default; }
   .btn { display:inline-block; font:inherit; padding:8px 14px; border-radius:8px; background:var(--accent); color:#fff; text-decoration:none; }
   .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .row.between { justify-content:space-between; }
   ul { list-style:none; margin:8px 0 0; padding:0; }
   li { display:flex; gap:10px; align-items:center; padding:10px 0; border-top:1px solid var(--line); }
   li:first-child { border-top:0; }
@@ -33,7 +35,24 @@
   li.bad { background:#fde8e6; margin:0 -8px; padding:10px 8px; border-radius:8px; }
   .results li { cursor:pointer; }
   .results li:hover { background:#f2f4f0; }
+  .thumb { width:56px; height:56px; object-fit:contain; border-radius:6px; background:#fff; border:1px solid var(--line); flex:none; }
+  .thumb.placeholder { background:#f2f4f0; }
+  .results .thumb { width:40px; height:40px; }
   .price { color:var(--muted); font-size:.9rem; white-space:nowrap; }
+  .sale { color:var(--ok); font-weight:600; font-size:.9rem; white-space:nowrap; }
+  .sale s { color:var(--muted); font-weight:400; margin-left:4px; }
+  .menu-wrap { position:relative; }
+  .menu { position:absolute; right:0; top:42px; background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,.08); display:flex; flex-direction:column; min-width:170px; z-index:5; overflow:hidden; }
+  .menu button { background:transparent; color:var(--ink); text-align:left; border-radius:0; padding:10px 14px; }
+  .menu button:hover { background:#f2f4f0; }
+  .menu button.danger { color:var(--danger); }
+  dialog { border:1px solid var(--line); border-radius:12px; padding:20px; width:min(760px, 95vw); color:var(--ink); }
+  dialog::backdrop { background:rgba(0,0,0,.3); }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:.95rem; }
+  th, td { text-align:left; padding:6px 4px; border-top:1px solid var(--line); vertical-align:middle; }
+  th { border-top:0; color:var(--muted); font-weight:500; }
+  td select { max-width:380px; width:100%; }
+  td .raw { color:var(--muted); font-size:.85rem; }
   footer { position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:1px solid var(--line); padding:12px 16px; }
   footer .inner { max-width:760px; margin:0 auto; display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
   .hidden { display:none !important; }
@@ -55,7 +74,8 @@
     </div>
     <div id="signin-block" class="row" style="margin-top:12px">
       <span class="muted">Sign in once so the app can add to your cart.</span>
-      <a class="btn" href="/auth/login">Sign in to Kroger</a>
+      <a id="signin-link" class="btn" href="/auth/login">Sign in to Kroger</a>
+      <span id="signin-remote" class="muted hidden">Sign in from the computer running the app; this device will share it.</span>
     </div>
   </section>
 
@@ -68,13 +88,32 @@
     <ul id="search-results" class="results"></ul>
   </section>
 
-  <section>
-    <div class="row" style="justify-content:space-between">
-      <h2 style="margin:0">Standard list <span id="store-label" class="muted"></span></h2>
-      <button id="change-store" class="secondary">Change store</button>
+  <section id="list-section">
+    <div class="row between">
+      <div class="row">
+        <select id="list-select" title="Choose a list"></select>
+        <div class="menu-wrap">
+          <button id="menu-btn" class="secondary" title="List actions">&#x22EF;</button>
+          <div id="menu" class="menu hidden">
+            <button data-action="new">New list</button>
+            <button data-action="rename">Rename</button>
+            <button data-action="duplicate">Duplicate</button>
+            <button data-action="import">Import items</button>
+            <button data-action="delete" class="danger">Delete list</button>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <span id="store-label" class="muted"></span>
+        <button id="change-store" class="secondary">Change store</button>
+      </div>
+    </div>
+    <div class="row between" style="margin-top:10px">
+      <span id="price-status" class="muted"></span>
+      <button id="check-prices" class="secondary">Check prices</button>
     </div>
     <ul id="items"></ul>
-    <p id="empty" class="muted hidden">Nothing saved yet. Search above to add items.</p>
+    <p id="empty" class="muted hidden">Nothing in this list yet. Search above to add items, or import a list from the menu.</p>
   </section>
 </main>
 
@@ -85,169 +124,30 @@
   </div>
 </footer>
 
-<script>
-const $ = (id) => document.getElementById(id);
-let state = { store: null, signed_in: false, items: [], warning: null };
+<dialog id="import-dialog">
+  <h2>Import items</h2>
+  <p class="muted">CSV, JSON, Markdown, or plain text, one item per line. Quantities like <code>2x milk</code> or <code>milk x2</code> are understood.</p>
+  <div class="row">
+    <input id="import-file" type="file" accept=".csv,.json,.md,.txt,text/*,application/json">
+  </div>
+  <textarea id="import-text" rows="6" placeholder="...or paste your list here"></textarea>
+  <div id="import-banner" class="banner"></div>
+  <div class="row">
+    <button id="import-parse">Find matches</button>
+    <button id="import-close" class="secondary">Cancel</button>
+  </div>
+  <div id="import-review" class="hidden">
+    <table id="import-table">
+      <thead><tr><th>Your line</th><th>Qty</th><th>Match at your store</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="row">
+      <button id="import-commit">Add to list</button>
+      <span id="import-summary" class="muted"></span>
+    </div>
+  </div>
+</dialog>
 
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-async function api(method, path, body) {
-  const res = await fetch(path, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    if (data.signed_in === false) { state.signed_in = false; render(); }
-    throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { data });
-  }
-  return data;
-}
-
-function banner(kind, text, html = false) {
-  const el = $('banner');
-  el.className = 'banner' + (kind ? ' ' + kind : '');
-  if (html) el.innerHTML = text || ''; else el.textContent = text || '';
-}
-
-function cleanItems() {
-  return state.items.map(({ upc, name, size, quantity, included }) => ({ upc, name, size, quantity, included }));
-}
-
-function render() {
-  const setupDone = !!(state.store && state.signed_in);
-  $('setup').classList.toggle('hidden', setupDone);
-  $('store-block').classList.toggle('hidden', !!state.store);
-  $('signin-block').classList.toggle('hidden', !!state.signed_in);
-  $('add').classList.toggle('hidden', !state.store);
-  $('store-label').textContent = state.store ? `· ${state.store.store_name}` : '';
-  $('push').disabled = !setupDone || !state.items.some(i => i.included);
-
-  const ul = $('items');
-  const active = document.activeElement?.dataset || {};
-  ul.innerHTML = '';
-  state.items.forEach((item, idx) => {
-    const li = document.createElement('li');
-    if (item.bad) li.classList.add('bad');
-    li.innerHTML = `
-      <input type="checkbox" ${item.included ? 'checked' : ''} data-idx="${idx}" data-field="included">
-      <div class="name"><div>${esc(item.name)}</div><div class="size">${esc(item.size)}</div></div>
-      <input type="number" min="1" value="${item.quantity}" data-idx="${idx}" data-field="quantity">
-      <button class="danger" data-remove="${esc(item.upc)}" title="Remove">&#x2715;</button>`;
-    ul.appendChild(li);
-  });
-  if (active.idx !== undefined) {
-    ul.querySelector(`[data-idx="${active.idx}"][data-field="${active.field}"]`)?.focus();
-  }
-  $('empty').classList.toggle('hidden', state.items.length > 0);
-}
-
-async function load() {
-  const params = new URLSearchParams(location.search);
-  const authError = params.get('auth_error');
-  if (authError) history.replaceState(null, '', location.pathname);
-  try {
-    state = await api('GET', '/api/state');
-    render();
-    if (authError) banner('error', `Kroger sign-in failed: ${authError}`);
-    else if (state.warning) banner('warn', state.warning);
-  } catch (e) { banner('error', e.message); render(); }
-}
-
-async function saveItems() {
-  try {
-    const data = await api('PUT', '/api/items', cleanItems());
-    const bad = new Set(state.items.filter(i => i.bad).map(i => i.upc));
-    state.items = data.items.map(i => ({ ...i, bad: bad.has(i.upc) }));
-  } catch (e) { banner('error', e.message); }
-}
-
-$('find-stores').onclick = async () => {
-  banner();
-  try {
-    const { stores } = await api('GET', `/api/stores?zip=${encodeURIComponent($('zip').value.trim())}`);
-    const ul = $('store-results'); ul.innerHTML = '';
-    stores.forEach(s => {
-      const li = document.createElement('li');
-      li.innerHTML = `<div class="name"><div>${esc(s.name)}</div><div class="size">${esc(s.address)}</div></div>`;
-      li.onclick = async () => {
-        try {
-          const data = await api('PUT', '/api/store', { id: s.id, name: s.name });
-          state.store = data.store; ul.innerHTML = ''; render();
-        } catch (e) { banner('error', e.message); }
-      };
-      ul.appendChild(li);
-    });
-    if (!stores.length) banner('warn', 'No stores found near that zip.');
-  } catch (e) { banner('error', e.message); }
-};
-
-$('change-store').onclick = () => { state.store = null; render(); };
-
-async function search() {
-  banner();
-  const term = $('term').value.trim();
-  if (!term) return;
-  try {
-    const { results } = await api('GET', `/api/search?term=${encodeURIComponent(term)}`);
-    const ul = $('search-results'); ul.innerHTML = '';
-    results.forEach(r => {
-      const li = document.createElement('li');
-      const price = r.price != null ? `$${Number(r.price).toFixed(2)}` : '';
-      li.innerHTML = `<div class="name"><div>${esc(r.name)}</div><div class="size">${esc(r.size)}</div></div><span class="price">${price}</span>`;
-      li.onclick = async () => {
-        try {
-          const data = await api('POST', '/api/items', { upc: r.upc, name: r.name, size: r.size });
-          state.items = data.items; ul.innerHTML = ''; $('term').value = ''; render();
-        } catch (e) { banner('error', e.message); }
-      };
-      ul.appendChild(li);
-    });
-    if (!results.length) banner('warn', `No matches for "${term}" at your store.`);
-  } catch (e) { banner('error', e.message); }
-}
-$('search').onclick = search;
-$('term').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
-
-$('items').addEventListener('change', async (e) => {
-  const { idx, field } = e.target.dataset;
-  if (idx === undefined) return;
-  const item = state.items[idx];
-  if (field === 'included') item.included = e.target.checked;
-  if (field === 'quantity') item.quantity = Math.max(1, parseInt(e.target.value || '1', 10) || 1);
-  await saveItems();
-  render();
-});
-
-$('items').addEventListener('click', async (e) => {
-  const upc = e.target.dataset.remove;
-  if (!upc) return;
-  try {
-    const data = await api('DELETE', `/api/items/${encodeURIComponent(upc)}`);
-    state.items = data.items; render();
-  } catch (err) { banner('error', err.message); }
-});
-
-$('push').onclick = async () => {
-  banner();
-  $('push').disabled = true;
-  try {
-    const { added } = await api('POST', '/api/push', cleanItems());
-    state.items.forEach(i => delete i.bad);
-    banner('ok', `Added to your Kroger cart: ${added.map(i => esc(i.name)).join(', ')}. ` +
-      `Finish checkout at <a href="https://www.kroger.com/cart" target="_blank" rel="noopener">kroger.com/cart</a> or in the Kroger app.`, true);
-  } catch (e) {
-    const bad = (e.data && e.data.bad_upcs) || [];
-    state.items.forEach(i => { i.bad = bad.includes(i.upc); });
-    banner('error', e.message + (bad.length ? ' The highlighted item was rejected; remove or replace it.' : ''));
-  }
-  render();
-};
-
-load();
-</script>
+<script src="/static/app.js"></script>
 </body>
 </html>
