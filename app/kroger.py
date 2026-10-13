@@ -124,24 +124,45 @@ class KrogerClient:
             stores.append({"id": loc["locationId"], "name": loc.get("name", ""), "address": ", ".join(parts)})
         return stores
 
+    @staticmethod
+    def _image_url(product: dict) -> str | None:
+        """Medium front image if available, else the first image of any size."""
+        images = product.get("images") or []
+        ordered = sorted(images, key=lambda im: 0 if im.get("perspective") == "front" or im.get("featured") else 1)
+        for image in ordered:
+            sizes = image.get("sizes") or []
+            for size in sizes:
+                if size.get("size") == "medium" and size.get("url"):
+                    return size["url"]
+            for size in sizes:
+                if size.get("url"):
+                    return size["url"]
+        return None
+
+    def _summarize(self, product: dict) -> dict:
+        item = (product.get("items") or [{}])[0]
+        price = item.get("price") or {}
+        return {
+            "upc": product["upc"],
+            "name": product.get("description", ""),
+            "brand": product.get("brand", ""),
+            "size": item.get("size", ""),
+            "price": price.get("regular"),
+            "promo": price.get("promo") or None,
+            "image": self._image_url(product),
+        }
+
     def search_products(self, term: str, location_id: str) -> list[dict]:
         body = self._get(
             "/products",
             self.app_token(),
             {"filter.term": term, "filter.locationId": location_id, "filter.limit": 10},
         )
-        results = []
-        for product in body.get("data", []):
-            item = (product.get("items") or [{}])[0]
-            price = item.get("price") or {}
-            results.append({
-                "upc": product["upc"],
-                "name": product.get("description", ""),
-                "brand": product.get("brand", ""),
-                "size": item.get("size", ""),
-                "price": price.get("promo") or price.get("regular"),
-            })
-        return results
+        return [self._summarize(p) for p in body.get("data", [])]
+
+    def lookup_product(self, upc: str, location_id: str) -> dict:
+        body = self._get(f"/products/{upc}", self.app_token(), {"filter.locationId": location_id})
+        return self._summarize(body["data"])
 
     # -- user token: OAuth authorization-code flow, needed for the cart ----
     def authorize_url(self) -> str:

@@ -68,6 +68,18 @@ def form(request: httpx.Request) -> dict:
 
 TOKEN = {"access_token": "app-tok", "token_type": "bearer", "expires_in": 1800}
 
+PRODUCT_MILK = {
+    "productId": "0001111041700", "upc": "0001111041700", "description": "Kroger Whole Milk", "brand": "Kroger",
+    "images": [
+        {"perspective": "back", "sizes": [{"size": "medium", "url": "https://img/back-m.jpg"}]},
+        {"perspective": "front", "featured": True, "sizes": [
+            {"size": "large", "url": "https://img/front-l.jpg"},
+            {"size": "medium", "url": "https://img/front-m.jpg"},
+        ]},
+    ],
+    "items": [{"size": "1 gal", "price": {"regular": 3.49, "promo": 2.99}}],
+}
+
 
 def test_app_token_uses_basic_auth_and_is_cached(client, server):
     server.queue(200, TOKEN)
@@ -109,24 +121,40 @@ def test_find_stores_parses_locations(client, server):
     assert req.headers["Authorization"] == "Bearer app-tok"
 
 
-def test_search_products_parses_and_prefers_promo_price(client, server):
+def test_search_products_parses_price_promo_and_front_image(client, server):
     server.queue(200, TOKEN)
     server.queue(200, {"data": [
-        {"upc": "0001111041700", "description": "Kroger Whole Milk", "brand": "Kroger",
-         "items": [{"size": "1 gal", "price": {"regular": 3.49, "promo": 2.99}}]},
+        PRODUCT_MILK,
         {"upc": "0001111041701", "description": "Kroger 2% Milk", "brand": "Kroger",
+         "images": [{"perspective": "left", "sizes": [{"size": "small", "url": "https://img/left-s.jpg"}]}],
          "items": [{"size": "1 gal", "price": {"regular": 3.49, "promo": 0}}]},
         {"upc": "0001111041702", "description": "Mystery Item", "items": []},
     ]})
     results = client.search_products("milk", "01400943")
     assert results == [
-        {"upc": "0001111041700", "name": "Kroger Whole Milk", "brand": "Kroger", "size": "1 gal", "price": 2.99},
-        {"upc": "0001111041701", "name": "Kroger 2% Milk", "brand": "Kroger", "size": "1 gal", "price": 3.49},
-        {"upc": "0001111041702", "name": "Mystery Item", "brand": "", "size": "", "price": None},
+        {"upc": "0001111041700", "name": "Kroger Whole Milk", "brand": "Kroger", "size": "1 gal",
+         "price": 3.49, "promo": 2.99, "image": "https://img/front-m.jpg"},
+        {"upc": "0001111041701", "name": "Kroger 2% Milk", "brand": "Kroger", "size": "1 gal",
+         "price": 3.49, "promo": None, "image": "https://img/left-s.jpg"},
+        {"upc": "0001111041702", "name": "Mystery Item", "brand": "", "size": "",
+         "price": None, "promo": None, "image": None},
     ]
     req = server.requests[1]
     assert req.url.path == "/v1/products"
     assert req.url.params["filter.term"] == "milk"
+    assert req.url.params["filter.locationId"] == "01400943"
+
+
+def test_lookup_product_parses_single_product(client, server):
+    server.queue(200, TOKEN)
+    server.queue(200, {"data": PRODUCT_MILK})
+    result = client.lookup_product("0001111041700", "01400943")
+    assert result["upc"] == "0001111041700"
+    assert result["price"] == 3.49
+    assert result["promo"] == 2.99
+    assert result["image"] == "https://img/front-m.jpg"
+    req = server.requests[1]
+    assert req.url.path == "/v1/products/0001111041700"
     assert req.url.params["filter.locationId"] == "01400943"
 
 
