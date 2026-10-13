@@ -2,6 +2,8 @@
 import json
 import threading
 
+import pytest
+
 from app.storage import Item, Storage, slugify
 
 
@@ -99,6 +101,17 @@ def test_list_entry_with_bad_fields_warns_and_keeps_name(tmp_path):
     assert "unexpected or missing fields" in loaded.warning
 
 
+def test_list_entry_with_huge_quantity_warns(tmp_path):
+    (tmp_path / "lists").mkdir()
+    (tmp_path / "lists" / "bad.json").write_text(
+        '{"name": "Bad", "items": [{"upc": "1", "name": "A", "size": "", "quantity": 1e999}]}',
+        encoding="utf-8",
+    )
+    loaded = Storage(tmp_path).load_list("bad")
+    assert loaded.items == []
+    assert "unexpected or missing fields" in loaded.warning
+
+
 def test_save_list_backs_up_unreadable_file_first(tmp_path):
     s = Storage(tmp_path)
     (tmp_path / "lists" / "bad.json").write_text("{not json", encoding="utf-8")
@@ -107,6 +120,25 @@ def test_save_list_backs_up_unreadable_file_first(tmp_path):
     assert len(backups) == 1
     assert backups[0].read_text(encoding="utf-8") == "{not json"
     assert s.load_list("bad").items == [milk()]
+
+
+def test_save_list_on_healthy_file_makes_no_backup(tmp_path):
+    s = Storage(tmp_path)
+    s.save_list("weekly", "Weekly", [milk()])
+    s.save_list("weekly", "Weekly", [milk(quantity=2)])
+    assert not list((tmp_path / "lists").glob("*.corrupt-*"))
+    assert s.load_list("weekly").items == [milk(quantity=2)]
+
+
+def test_rejects_slugs_that_are_not_slugs(tmp_path):
+    s = Storage(tmp_path)
+    s.save_config({"store_id": "01400943"})
+    assert s.load_list("../config") is None
+    with pytest.raises(KeyError):
+        s.save_list("../config", "x", [])
+    with pytest.raises(KeyError):
+        s.delete_list("..\\config")
+    assert s.load_config() == {"store_id": "01400943"}
 
 
 # -- rename / duplicate / delete / listing ----------------------------------
@@ -130,6 +162,15 @@ def test_duplicate_copies_items_under_new_slug(tmp_path):
     assert s.load_list("weekly").items == [milk()]
 
 
+def test_rename_and_duplicate_missing_slug_raise_keyerror(tmp_path):
+    s = Storage(tmp_path)
+    with pytest.raises(KeyError):
+        s.rename_list("ghost", "Ghost")
+    with pytest.raises(KeyError):
+        s.duplicate_list("ghost", "Ghost copy")
+    assert s.list_slugs() == []
+
+
 def test_delete_list_removes_file_and_clears_active(tmp_path):
     s = Storage(tmp_path)
     s.save_list("a", "A", [])
@@ -139,6 +180,17 @@ def test_delete_list_removes_file_and_clears_active(tmp_path):
     assert s.list_slugs() == ["b"]
     assert s.active_list() == "b"
     assert "active_list" not in s.load_config()
+
+
+def test_delete_non_active_list_keeps_active(tmp_path):
+    s = Storage(tmp_path)
+    s.save_list("a", "A", [])
+    s.save_list("b", "B", [])
+    s.set_active_list("a")
+    s.delete_list("b")
+    assert s.list_slugs() == ["a"]
+    assert s.load_config()["active_list"] == "a"
+    assert s.active_list() == "a"
 
 
 def test_active_list_falls_back_to_first_when_unset_or_missing(tmp_path):
@@ -163,6 +215,19 @@ def test_list_lists_sorted_by_name_with_counts(tmp_path):
         {"slug": "bad", "name": "bad", "count": 0},
         {"slug": "a", "name": "Zulu", "count": 0},
     ]
+
+
+def test_list_lists_skips_lists_that_vanish_mid_iteration(tmp_path, monkeypatch):
+    s = Storage(tmp_path)
+    s.save_list("a", "A", [])
+    s.save_list("b", "B", [milk()])
+    real_load = s.load_list
+
+    def racy_load(slug):  # simulate a delete landing between glob and load
+        return None if slug == "a" else real_load(slug)
+
+    monkeypatch.setattr(s, "load_list", racy_load)
+    assert s.list_lists() == [{"slug": "b", "name": "B", "count": 1}]
 
 
 # -- migration / ensure_ready -----------------------------------------------

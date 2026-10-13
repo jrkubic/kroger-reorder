@@ -568,7 +568,7 @@ Note on `test_ensure_ready_backs_up_corrupt_legacy_and_creates_default`: `_migra
 **Step 4: Run storage tests**
 
 Run: `.venv/Scripts/python -m pytest tests/test_storage.py -q`
-Expected: `25 passed`. (Other test files will now fail to import or call the old API; that is expected until Tasks 2 and 4.)
+Expected: `24 passed`. (Other test files will now fail to import or call the old API; that is expected until Tasks 2 and 4.)
 
 **Step 5: Commit**
 
@@ -1679,7 +1679,7 @@ printf '// replaced in Task 6\n' > app/static/app.js
 **Step 5: Run everything**
 
 Run: `.venv/Scripts/python -m pytest -q`
-Expected: `25 + 29 + 13 + 4 + 40 = 111 passed` (storage, kroger, importer, settings, routes). If the count differs slightly, make sure every file is green rather than chasing the number.
+Expected: `30 + 29 + 13 + 4 + 40 = 116 passed` (storage, kroger, importer, settings, routes). If the count differs slightly, make sure every file is green rather than chasing the number.
 
 **Step 6: Commit**
 

@@ -24,6 +24,11 @@ def slugify(name: str) -> str:
     return slug or "list"
 
 
+def _valid_slug(slug: str) -> bool:
+    """Slugs become path components; only accept what slugify itself would produce."""
+    return bool(slug) and slug == slugify(slug)
+
+
 @dataclass
 class Item:
     upc: str
@@ -68,7 +73,7 @@ def parse_items(raw: Any) -> list[Item]:
             )
             for e in raw
         ]
-    except (TypeError, KeyError, ValueError, AttributeError) as exc:
+    except (TypeError, KeyError, ValueError, AttributeError, OverflowError) as exc:
         raise ValueError(f"an entry has unexpected or missing fields ({exc})") from exc
 
 
@@ -117,12 +122,17 @@ class Storage:
 
     def list_lists(self) -> list[dict]:
         out = []
-        for slug in self.list_slugs():
-            loaded = self.load_list(slug)
-            out.append({"slug": slug, "name": loaded.name, "count": len(loaded.items)})
+        with self._lock:  # a concurrent delete between glob and load would otherwise yield None
+            for slug in self.list_slugs():
+                loaded = self.load_list(slug)
+                if loaded is None:
+                    continue
+                out.append({"slug": slug, "name": loaded.name, "count": len(loaded.items)})
         return sorted(out, key=lambda d: d["name"].lower())
 
     def load_list(self, slug: str) -> ListLoad | None:
+        if not _valid_slug(slug):
+            return None
         file = self._list_file(slug)
         try:
             raw = self._read(file)
@@ -142,6 +152,8 @@ class Storage:
         return ListLoad(slug, name, items)
 
     def save_list(self, slug: str, name: str, items: list[Item]) -> None:
+        if not _valid_slug(slug):
+            raise KeyError(slug)
         file = self._list_file(slug)
         with self._lock:
             loaded = self.load_list(slug)
@@ -176,6 +188,8 @@ class Storage:
             return new
 
     def delete_list(self, slug: str) -> None:
+        if not _valid_slug(slug):
+            raise KeyError(slug)
         with self._lock:
             self._path(self._list_file(slug)).unlink(missing_ok=True)
             if self.load_config().get("active_list") == slug:
