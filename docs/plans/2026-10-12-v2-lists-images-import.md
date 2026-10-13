@@ -1679,7 +1679,7 @@ printf '// replaced in Task 6\n' > app/static/app.js
 **Step 5: Run everything**
 
 Run: `.venv/Scripts/python -m pytest -q`
-Expected: `30 + 29 + 13 + 4 + 40 = 116 passed` (storage, kroger, importer, settings, routes). If the count differs slightly, make sure every file is green rather than chasing the number.
+Expected: `30 + 25 + 13 + 5 + 39 = 112 passed` (storage, kroger, importer, settings, routes). If the count differs slightly, make sure every file is green rather than chasing the number.
 
 **Step 6: Commit**
 

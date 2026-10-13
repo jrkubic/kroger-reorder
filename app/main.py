@@ -1,20 +1,25 @@
-"""FastAPI app: serves the page and a small JSON API over Storage + KrogerClient."""
+# app/main.py
+"""FastAPI app: serves the page and a JSON API over Storage + KrogerClient."""
 from __future__ import annotations
 
 import re
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .importer import parse as parse_import
 from .kroger import KrogerError, NotSignedIn
-from .storage import Item, Storage
+from .storage import Item, ListLoad, Storage
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+RESOLVE_CANDIDATES = 3
 
 
 class StoreChoice(BaseModel):
@@ -22,10 +27,21 @@ class StoreChoice(BaseModel):
     name: str
 
 
+class ListName(BaseModel):
+    name: str
+
+
+class ActiveChoice(BaseModel):
+    slug: str
+
+
 class NewItem(BaseModel):
     upc: str
     name: str
     size: str = ""
+    image: str | None = None
+    price: float | None = None
+    promo: float | None = None
 
 
 class ItemModel(BaseModel):
@@ -34,11 +50,39 @@ class ItemModel(BaseModel):
     size: str = ""
     quantity: int = 1
     included: bool = True
+    image: str | None = None
+    price: float | None = None
+    promo: float | None = None
+    price_checked_at: str | None = None
+
+
+class ImportText(BaseModel):
+    text: str
+
+
+class ResolveRequest(BaseModel):
+    names: list[str]
+
+
+class ImportItem(BaseModel):
+    upc: str
+    name: str
+    size: str = ""
+    image: str | None = None
+    quantity: int = 1
+
+
+class ListNotFound(Exception):
+    def __init__(self, slug: str) -> None:
+        super().__init__(slug)
+        self.slug = slug
 
 
 def create_app(storage: Storage, kroger) -> FastAPI:
     """`kroger` is a KrogerClient or anything with the same methods (tests pass a fake)."""
+    storage.ensure_ready()
     app = FastAPI(title="Kroger Reorder")
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     def error(status: int, message: str, **extra) -> JSONResponse:
         return JSONResponse(status_code=status, content={"error": message, **extra})
@@ -55,16 +99,38 @@ def create_app(storage: Storage, kroger) -> FastAPI:
     async def kroger_error(_: Request, exc: KrogerError):
         return error(502, kroger_message(exc))
 
+    @app.exception_handler(ListNotFound)
+    async def list_not_found(_: Request, exc: ListNotFound):
+        return error(404, f"No list named '{exc.slug}'.")
+
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, exc: RequestValidationError):
         first = exc.errors()[0] if exc.errors() else {}
         loc = ".".join(str(p) for p in first.get("loc", []) if p != "body")
         return error(422, f"Invalid request: {loc or 'body'} {first.get('msg', '')}".strip())
 
-    def items_payload() -> dict:
-        loaded = storage.load_list()
-        return {"items": [asdict(i) for i in loaded.items], "warning": loaded.warning}
+    # -- helpers ----------------------------------------------------------------------
+    def get_list(slug: str) -> ListLoad:
+        loaded = storage.load_list(slug)
+        if loaded is None:
+            raise ListNotFound(slug)
+        return loaded
 
+    def list_payload(loaded: ListLoad, **extra) -> dict:
+        return {"slug": loaded.slug, "name": loaded.name,
+                "items": [asdict(i) for i in loaded.items], "warning": loaded.warning, **extra}
+
+    def lists_payload() -> dict:
+        return {"lists": storage.list_lists(), "active_list": storage.active_list()}
+
+    def store_id() -> str | None:
+        return storage.load_config().get("store_id")
+
+    def clean_name(raw: str) -> str | None:
+        name = raw.strip()
+        return name or None
+
+    # -- page / setup -----------------------------------------------------------------
     @app.get("/")
     def index():
         return FileResponse(STATIC_DIR / "index.html")
@@ -72,7 +138,8 @@ def create_app(storage: Storage, kroger) -> FastAPI:
     @app.get("/api/state")
     def state():
         config = storage.load_config()
-        return {"store": config or None, "signed_in": kroger.is_signed_in(), **items_payload()}
+        store = {"store_id": config["store_id"], "store_name": config.get("store_name", "")} if config.get("store_id") else None
+        return {"store": store, "signed_in": kroger.is_signed_in(), **lists_payload()}
 
     @app.get("/api/stores")
     def stores(zip: str):
@@ -80,8 +147,8 @@ def create_app(storage: Storage, kroger) -> FastAPI:
 
     @app.put("/api/store")
     def choose_store(choice: StoreChoice):
-        storage.save_config({"store_id": choice.id, "store_name": choice.name})
-        return {"store": storage.load_config()}
+        storage.save_config({**storage.load_config(), "store_id": choice.id, "store_name": choice.name})
+        return {"store": {"store_id": choice.id, "store_name": choice.name}}
 
     @app.get("/auth/login")
     def login():
@@ -99,38 +166,108 @@ def create_app(storage: Storage, kroger) -> FastAPI:
 
     @app.get("/api/search")
     def search(term: str):
-        config = storage.load_config()
-        if not config.get("store_id"):
+        sid = store_id()
+        if not sid:
             return error(400, "Pick a store first.")
-        return {"results": kroger.search_products(term, config["store_id"])}
+        return {"results": kroger.search_products(term, sid)}
 
-    @app.post("/api/items")
-    def add_item(new: NewItem):
-        items = storage.load_list().items
-        if not any(i.upc == new.upc for i in items):
-            items.append(Item(upc=new.upc, name=new.name, size=new.size))
-            storage.save_list(items)
-        return items_payload()
+    # -- lists ------------------------------------------------------------------------------
+    @app.post("/api/lists")
+    def create_list(body: ListName):
+        name = clean_name(body.name)
+        if not name:
+            return error(400, "Give the list a name.")
+        return {"slug": storage.create_list(name)}
 
-    @app.put("/api/items")
-    def replace_items(models: list[ItemModel]):
-        if models:
-            storage.save_list([Item(**m.model_dump()) for m in models])
-        return items_payload()
+    @app.patch("/api/lists/{slug}")
+    def rename_list(slug: str, body: ListName):
+        name = clean_name(body.name)
+        if not name:
+            return error(400, "Give the list a name.")
+        get_list(slug)
+        storage.rename_list(slug, name)
+        return {"slug": slug, "name": name}
 
-    @app.delete("/api/items/{upc}")
-    def remove_item(upc: str):
-        items = storage.load_list().items
-        kept = [i for i in items if i.upc != upc]
-        if len(kept) != len(items):
-            storage.save_list(kept)
-        return items_payload()
+    @app.post("/api/lists/{slug}/duplicate")
+    def duplicate_list(slug: str, body: ListName):
+        name = clean_name(body.name)
+        if not name:
+            return error(400, "Give the copy a name.")
+        get_list(slug)
+        return {"slug": storage.duplicate_list(slug, name)}
 
-    @app.post("/api/push")
-    def push(models: list[ItemModel]):
+    @app.delete("/api/lists/{slug}")
+    def delete_list(slug: str):
+        get_list(slug)
+        if len(storage.list_slugs()) <= 1:
+            return error(400, "You can't delete the last list. Create another one first.")
+        storage.delete_list(slug)
+        return lists_payload()
+
+    @app.put("/api/active")
+    def set_active(body: ActiveChoice):
+        get_list(body.slug)
+        storage.set_active_list(body.slug)
+        return {"active_list": body.slug}
+
+    @app.get("/api/lists/{slug}")
+    def read_list(slug: str):
+        return list_payload(get_list(slug))
+
+    # -- items ----------------------------------------------------------------------------
+    @app.post("/api/lists/{slug}/items")
+    def add_item(slug: str, new: NewItem):
+        loaded = get_list(slug)
+        if not any(i.upc == new.upc for i in loaded.items):
+            loaded.items.append(Item(**new.model_dump()))
+            storage.save_list(slug, loaded.name, loaded.items)
+        return list_payload(get_list(slug))
+
+    @app.put("/api/lists/{slug}/items")
+    def replace_items(slug: str, models: list[ItemModel]):
+        loaded = get_list(slug)
+        if models:  # an empty body is a no-op, never a clear; removal goes through DELETE
+            storage.save_list(slug, loaded.name, [Item(**m.model_dump()) for m in models])
+        return list_payload(get_list(slug))
+
+    @app.delete("/api/lists/{slug}/items/{upc}")
+    def remove_item(slug: str, upc: str):
+        loaded = get_list(slug)
+        kept = [i for i in loaded.items if i.upc != upc]
+        if len(kept) != len(loaded.items):
+            storage.save_list(slug, loaded.name, kept)
+        return list_payload(get_list(slug))
+
+    @app.post("/api/lists/{slug}/prices")
+    def refresh_prices(slug: str):
+        sid = store_id()
+        if not sid:
+            return error(400, "Pick a store first.")
+        loaded = get_list(slug)
+        if not loaded.items:
+            return list_payload(loaded, failed=0)
+        failed, last_error = 0, None
+        now = datetime.now().isoformat(timespec="seconds")
+        for item in loaded.items:
+            try:
+                fresh = kroger.lookup_product(item.upc, sid)
+            except KrogerError as exc:
+                failed += 1
+                last_error = exc
+                continue
+            item.price, item.promo, item.price_checked_at = fresh.get("price"), fresh.get("promo"), now
+            item.image = fresh.get("image") or item.image
+        if failed == len(loaded.items):
+            return error(502, f"Couldn't check prices: {kroger_message(last_error)}")
+        storage.save_list(slug, loaded.name, loaded.items)
+        return list_payload(get_list(slug), failed=failed)
+
+    @app.post("/api/lists/{slug}/push")
+    def push(slug: str, models: list[ItemModel]):
+        loaded = get_list(slug)
         items = [Item(**m.model_dump()) for m in models]
         if models:
-            storage.save_list(items)
+            storage.save_list(slug, loaded.name, items)
         chosen = [i for i in items if i.included and i.quantity > 0]
         if not chosen:
             return error(400, "Nothing is checked to send.")
@@ -143,5 +280,42 @@ def create_app(storage: Storage, kroger) -> FastAPI:
             bad = [i.upc for i in chosen if re.search(rf"(?<!\d){re.escape(i.upc)}(?!\d)", exc.message)]
             return error(502, kroger_message(exc), bad_upcs=bad)
         return {"added": [asdict(i) for i in chosen]}
+
+    # -- import ----------------------------------------------------------------------------
+    @app.post("/api/import/parse")
+    def import_parse(body: ImportText):
+        lines = parse_import(body.text)
+        if not lines:
+            return error(400, "Couldn't find any items in that text. Try one item per line.")
+        return {"lines": [asdict(line) for line in lines]}
+
+    @app.post("/api/import/resolve")
+    def import_resolve(body: ResolveRequest):
+        sid = store_id()
+        if not sid:
+            return error(400, "Pick a store first.")
+        matches = []
+        for name in body.names:
+            try:
+                candidates = kroger.search_products(name, sid)[:RESOLVE_CANDIDATES]
+            except KrogerError:
+                candidates = []
+            matches.append({"name": name, "candidates": candidates})
+        return {"matches": matches}
+
+    @app.post("/api/lists/{slug}/import")
+    def import_commit(slug: str, picks: list[ImportItem]):
+        loaded = get_list(slug)
+        by_upc = {i.upc: i for i in loaded.items}
+        for pick in picks:
+            if pick.upc in by_upc:
+                by_upc[pick.upc].quantity += max(1, pick.quantity)
+            else:
+                item = Item(upc=pick.upc, name=pick.name, size=pick.size, image=pick.image, quantity=max(1, pick.quantity))
+                loaded.items.append(item)
+                by_upc[pick.upc] = item
+        if picks:
+            storage.save_list(slug, loaded.name, loaded.items)
+        return list_payload(get_list(slug))
 
     return app
