@@ -66,3 +66,26 @@ def test_invalid_json_falls_back_to_lines():
 def test_bulleted_lines_with_commas_are_not_csv():
     text = "- milk, whole\n- eggs, large"
     assert names(parse(text)) == [("milk, whole", 1), ("eggs, large", 1)]
+
+
+def test_tsv_from_spreadsheet_paste():
+    assert names(parse("milk\t2\neggs\t3")) == [("milk", 2), ("eggs", 3)]
+    assert names(parse("name\tqty\nmilk\t2")) == [("milk", 2)]
+
+
+def test_utf8_bom_is_ignored():
+    assert names(parse("﻿name,quantity\nmilk,2")) == [("milk", 2)]
+
+
+def test_bare_bullets_yield_nothing():
+    assert names(parse("- \n-\n- milk")) == [("milk", 1)]
+
+
+def test_quantity_is_capped():
+    assert names(parse("500x milk")) == [("milk", 99)]
+    assert names(parse("name,quantity\nmilk,500")) == [("milk", 99)]
+    assert names(parse('[{"name": "milk", "quantity": 500}]')) == [("milk", 99)]
+
+
+def test_json_non_scalar_name_is_skipped():
+    assert names(parse('[{"name": {"a": 1}}, {"name": "milk"}]')) == [("milk", 1)]
