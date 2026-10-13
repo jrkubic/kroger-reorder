@@ -1778,17 +1778,31 @@ if __name__ == "__main__":
 
 **Step 2: Verify it starts and migrates**
 
-Make a throwaway v1 file first, then start with fake credentials on a spare port:
+**Never run this against the real `data/` directory; it holds the user's list and tokens.**
+
+Make a throwaway v1 file in a temporary directory under the scratchpad, then start the app with fake credentials on a spare port. `KROGER_DATA_DIR` stays unset; instead a tiny launcher imports `app.__main__`, swaps its `Storage` for one rooted at the temp dir, stubs `webbrowser.open` so no browser tab appears, and calls `main()`:
 
 ```bash
-mkdir -p data && printf '[{"upc":"0001","name":"Milk","size":"1 gal"}]' > data/list.json
-KROGER_CLIENT_ID=x KROGER_CLIENT_SECRET=y PORT=8767 timeout 6 .venv/Scripts/python -m app & sleep 3
+TMP=$(mktemp -d "$SCRATCHPAD/v1-migrate.XXXXXX")   # $SCRATCHPAD is the session scratchpad directory
+mkdir -p "$TMP/data" && printf '[{"upc":"0001","name":"Milk","size":"1 gal"}]' > "$TMP/data/list.json"
+cat > "$TMP/launch.py" <<'EOF'
+import functools, os, pathlib, sys, webbrowser
+sys.path.insert(0, os.getcwd())
+import app.__main__ as entry
+from app.storage import Storage
+
+tmp_dir = pathlib.Path(sys.argv[1])
+entry.Storage = functools.partial(Storage, tmp_dir)  # main() calls Storage() with no args
+webbrowser.open = lambda *a, **k: True
+entry.main()
+EOF
+KROGER_CLIENT_ID=x KROGER_CLIENT_SECRET=y PORT=8767 timeout 6 .venv/Scripts/python "$TMP/launch.py" "$TMP/data" & sleep 3
 curl -s http://127.0.0.1:8767/api/state; echo
 curl -s http://127.0.0.1:8767/api/lists/standard; echo
-wait; ls data data/lists; rm -rf data
+wait; ls "$TMP/data" "$TMP/data/lists"; rm -rf "$TMP"
 ```
 
-Expected: the state shows `"lists":[{"slug":"standard","name":"Standard","count":1}]`, the list has Milk, `data/list.json.migrated` exists, and the console printed both URLs. (Your real `.env` is read by `load_dotenv` but the explicit env vars take precedence; the test never calls Kroger.)
+Expected: the state shows `"lists":[{"slug":"standard","name":"Standard","count":1}]`, the list has Milk, `$TMP/data/list.json.migrated` exists, and the console printed both URLs. (Your real `.env` is read by `load_dotenv` but the explicit env vars take precedence; the test never calls Kroger.) The real `data/` directory is never read or written.
 
 **Step 3: Commit**
 
