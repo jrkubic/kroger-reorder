@@ -123,12 +123,13 @@ function render() {
 }
 
 function adoptList(data) {
+  const entry = state.lists.find(l => l.slug === data.slug);
+  if (entry) { entry.name = data.name; entry.count = data.items.length; }
+  if (data.slug !== state.active_list) return;   // stale response for another list
   const bad = new Set(state.items.filter(i => i.bad).map(i => i.upc));
   state.items = data.items.map(i => ({ ...i, bad: bad.has(i.upc) }));
   state.name = data.name;
   state.warning = data.warning;
-  const entry = state.lists.find(l => l.slug === data.slug);
-  if (entry) { entry.name = data.name; entry.count = data.items.length; }
 }
 
 // -- loading ----------------------------------------------------------------------------
@@ -146,12 +147,15 @@ async function loadList() {
 
 async function refreshPrices(manual) {
   if (!state.store || !state.items.length) return;
+  const slug = state.active_list;
   $('check-prices').disabled = true;
   $('price-status').textContent = 'Checking prices…';
   try {
     const data = await api('POST', listPath('/prices'));
     adoptList(data);
-    if (manual) banner('ok', data.failed ? `Prices updated; ${data.failed} item${data.failed === 1 ? '' : 's'} couldn't be checked.` : 'Prices updated.');
+    if (manual && slug === state.active_list) {
+      banner('ok', data.failed ? `Prices updated; ${data.failed} item${data.failed === 1 ? '' : 's'} couldn't be checked.` : 'Prices updated.');
+    }
   } catch (e) {
     if (manual) banner('error', e.message);
   }
@@ -260,7 +264,7 @@ $('check-prices').onclick = () => { banner(); refreshPrices(true); };
 
 // -- list selector and menu --------------------------------------------------------------
 
-$('list-select').onchange = (e) => switchList(e.target.value).catch(err => banner('error', err.message));
+$('list-select').onchange = (e) => switchList(e.target.value).catch(err => { banner('error', err.message); render(); });
 
 $('menu-btn').onclick = (e) => { e.stopPropagation(); $('menu').classList.toggle('hidden'); };
 document.addEventListener('click', () => $('menu').classList.add('hidden'));
@@ -291,8 +295,8 @@ $('menu').addEventListener('click', async (e) => {
     } else if (action === 'delete') {
       if (!confirm(`Delete "${state.name}" and its ${state.items.length} item${state.items.length === 1 ? '' : 's'}?`)) return;
       const data = await api('DELETE', listPath());
-      state.lists = data.lists; state.active_list = data.active_list;
-      await loadList(); render();
+      state.lists = data.lists;
+      await switchList(data.active_list);
     } else if (action === 'import') {
       openImport();
     }
@@ -318,12 +322,14 @@ $('import-file').onchange = async (e) => {
   if (file) $('import-text').value = await file.text();
 };
 
+$('import-text').oninput = () => { importRows = []; $('import-review').classList.add('hidden'); };
+
 $('import-parse').onclick = async () => {
+  $('import-parse').disabled = true;
   banner(null, '', false, $('import-banner'));
   const text = $('import-text').value;
   try {
     const { lines } = await api('POST', '/api/import/parse', { text });
-    $('import-parse').disabled = true;
     banner('warn', `Looking up ${lines.length} item${lines.length === 1 ? '' : 's'} at your store…`, false, $('import-banner'));
     const { matches } = await api('POST', '/api/import/resolve', { names: lines.map(l => l.name) });
     importRows = lines.map((l, i) => ({ ...l, candidates: matches[i].candidates }));
@@ -331,8 +337,9 @@ $('import-parse').onclick = async () => {
     renderImport();
   } catch (e) {
     banner('error', e.message, false, $('import-banner'));
+  } finally {
+    $('import-parse').disabled = false;
   }
-  $('import-parse').disabled = false;
 };
 
 function renderImport() {
@@ -372,6 +379,7 @@ function updateImportSummary() {
 $('import-table').addEventListener('change', updateImportSummary);
 
 $('import-commit').onclick = async () => {
+  $('import-commit').disabled = true;
   const picks = importPicks();
   try {
     adoptList(await api('POST', listPath('/import'), picks));
@@ -381,6 +389,8 @@ $('import-commit').onclick = async () => {
     if (pricesStale()) refreshPrices(false);
   } catch (e) {
     banner('error', e.message, false, $('import-banner'));
+  } finally {
+    $('import-commit').disabled = false;
   }
 };
 

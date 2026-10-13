@@ -56,6 +56,7 @@
   footer { position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:1px solid var(--line); padding:12px 16px; }
   footer .inner { max-width:760px; margin:0 auto; display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
   .hidden { display:none !important; }
+  @media (max-width: 400px) { .thumb { width:44px; height:44px; } .results .thumb { width:36px; height:36px; } .sale, .price { white-space:normal; } }
 </style>
 </head>
 <body>
@@ -126,9 +127,9 @@
 
 <dialog id="import-dialog">
   <h2>Import items</h2>
-  <p class="muted">CSV, JSON, Markdown, or plain text, one item per line. Quantities like <code>2x milk</code> or <code>milk x2</code> are understood.</p>
+  <p class="muted">CSV, TSV (pasted from a spreadsheet), JSON, Markdown, or plain text, one item per line. Quantities like <code>2x milk</code> or <code>milk x2</code> are understood.</p>
   <div class="row">
-    <input id="import-file" type="file" accept=".csv,.json,.md,.txt,text/*,application/json">
+    <input id="import-file" type="file" accept=".csv,.tsv,.json,.md,.txt,text/*,application/json">
   </div>
   <textarea id="import-text" rows="6" placeholder="...or paste your list here"></textarea>
   <div id="import-banner" class="banner"></div>

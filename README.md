@@ -1,6 +1,6 @@
 # Kroger Reorder
 
-A tiny local web page that pushes your saved "standard" grocery list into your Kroger cart in one click. Keep several named lists, see product photos and sale prices, and import a list from a file. You finish checkout (pickup time, payment) in the Kroger app or at kroger.com.
+A tiny local web page that pushes your saved grocery lists into your Kroger cart in one click. Keep several named lists, see product photos and sale prices, and import a list from a file. You finish checkout (pickup time, payment) in the Kroger app or at kroger.com.
 
 ## One-time setup
 
@@ -44,7 +44,7 @@ The console also prints a wifi address like `http://192.168.1.20:8000`. Open tha
 4. Uncheck anything you don't need this trip, tweak quantities, click **Send to cart**.
 5. Open the Kroger app, choose a pickup time, pay.
 
-To add an item to the standard list, search for it in the **Add an item** box and click the match.
+To add an item to the current list, search for it in the **Add an item** box and click the match.
 
 ## Sale prices
 
@@ -56,6 +56,7 @@ From the ⋯ menu choose **Import items**, then pick a file or paste text. Accep
 
 - Plain text or Markdown: one item per line. `- [ ] 2x milk`, `eggs x3`, and `bread (4)` all work.
 - CSV: a `name` column and optional `quantity` column, or just two columns.
+- TSV: two columns pasted straight from a spreadsheet.
 - JSON: an array of strings or of `{"name": ..., "quantity": ...}` objects.
 
 Each line is matched against your store's catalog. Pick a different match or skip a line in the review table, then **Add to list**. Items already in the list get their quantity bumped.
