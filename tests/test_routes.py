@@ -234,13 +234,57 @@ def test_get_list_includes_warning_when_file_is_corrupt(client, tmp_path):
     assert "not valid JSON" in body["warning"]
 
 
+def test_rename_corrupt_list_is_refused_and_file_untouched(client, tmp_path):
+    path = tmp_path / "lists" / "standard.json"
+    path.write_text("nope", encoding="utf-8")
+    r = client.patch("/api/lists/standard", json={"name": "Weekly"})
+    assert r.status_code == 400
+    assert "not valid JSON" in r.json()["error"]
+    assert path.read_text(encoding="utf-8") == "nope"
+
+
+def test_duplicate_corrupt_list_is_refused(client, tmp_path, storage):
+    path = tmp_path / "lists" / "standard.json"
+    path.write_text("nope", encoding="utf-8")
+    r = client.post("/api/lists/standard/duplicate", json={"name": "Party"})
+    assert r.status_code == 400
+    assert "unreadable" in r.json()["error"]
+    assert path.read_text(encoding="utf-8") == "nope"
+    assert storage.list_slugs() == ["standard"]
+
+
+def test_slug_traversal_is_404(client, tmp_path, storage):
+    before = (tmp_path / "config.json").read_text(encoding="utf-8")
+    r = client.put("/api/active", json={"slug": "../config"})
+    assert r.status_code == 404
+    assert (tmp_path / "config.json").read_text(encoding="utf-8") == before
+    assert storage.active_list() == "standard"
+
+
+def test_delete_non_active_list_keeps_active_route(client):
+    client.post("/api/lists", json={"name": "Other"})
+    r = client.delete("/api/lists/other")
+    assert r.status_code == 200
+    assert r.json() == {"lists": [{"slug": "standard", "name": "Standard", "count": 0}], "active_list": "standard"}
+    assert client.get("/api/lists/standard").status_code == 200
+
+
 # -- items --------------------------------------------------------------------------
 
 def test_add_item_stores_image_and_dedupes(client):
     r = client.post("/api/lists/standard/items", json={**MILK, "image": "https://img/1.jpg", "price": 3.49, "promo": 2.99})
-    assert r.json()["items"] == [{**MILK, **FULL, "image": "https://img/1.jpg", "price": 3.49, "promo": 2.99}]
+    [milk] = r.json()["items"]
+    assert milk.pop("price_checked_at")  # a priced add is stamped: the price was fetched just now
+    expected = {**MILK, **FULL, "image": "https://img/1.jpg", "price": 3.49, "promo": 2.99}
+    expected.pop("price_checked_at")
+    assert milk == expected
     client.post("/api/lists/standard/items", json=MILK)
     assert len(client.get("/api/lists/standard").json()["items"]) == 1
+
+
+def test_add_item_without_price_is_not_stamped(client):
+    r = client.post("/api/lists/standard/items", json=EGGS)
+    assert r.json()["items"] == [{**EGGS, **FULL}]
 
 
 def test_replace_items_saves_quantities_and_flags(client, storage):
@@ -311,13 +355,14 @@ def test_refresh_prices_updates_each_item(client, kroger, with_store):
     items = r.json()["items"]
     assert kroger.lookup_calls == ["0001", "0002"]
     assert all(i["price"] == 5.0 and i["promo"] == 4.0 and i["price_checked_at"] for i in items)
+    assert all(i["price_checked_at"].endswith("+00:00") for i in items)  # UTC, never naive local time
     assert items[0]["image"] == "https://img/0001.jpg"
     assert r.json()["failed"] == 0
 
 
 def test_refresh_prices_partial_failure_keeps_old_values(client, kroger, with_store):
-    client.post("/api/lists/standard/items", json={**MILK, "price": 1.0})
-    client.post("/api/lists/standard/items", json=EGGS)
+    # Seed via PUT so milk carries an old price with no stamp (a priced POST would stamp it).
+    client.put("/api/lists/standard/items", json=[{**MILK, **FULL, "price": 1.0}, {**EGGS, **FULL}])
     kroger.lookups["0001"] = KrogerError(404, "not found")
     r = client.post("/api/lists/standard/prices")
     assert r.status_code == 200
@@ -339,6 +384,16 @@ def test_refresh_prices_on_empty_list_is_noop(client, with_store, kroger):
     r = client.post("/api/lists/standard/prices")
     assert r.status_code == 200
     assert kroger.lookup_calls == []
+
+
+def test_refresh_prices_stops_after_three_transport_failures(client, kroger, with_store):
+    for n in range(6):
+        client.post("/api/lists/standard/items", json={"upc": f"000{n}", "name": f"Item {n}"})
+        kroger.lookups[f"000{n}"] = KrogerError(0, "Could not reach Kroger: ConnectError")
+    r = client.post("/api/lists/standard/prices")
+    assert r.status_code == 502
+    assert "Could not reach Kroger" in r.json()["error"]
+    assert len(kroger.lookup_calls) == 3  # transport failures aren't item-specific; stop hammering
 
 
 # -- import ------------------------------------------------------------------------------
@@ -369,6 +424,15 @@ def test_import_resolve_returns_up_to_three_candidates_per_name(client, with_sto
     matches = r.json()["matches"]
     assert matches[0]["name"] == "milk" and len(matches[0]["candidates"]) == 3
     assert matches[1] == {"name": "unobtainium", "candidates": []}
+
+
+def test_import_resolve_total_failure_is_502(client, with_store, kroger):
+    def boom(term, location_id):
+        raise KrogerError(0, "Could not reach Kroger: ConnectError")
+    kroger.search_products = boom
+    r = client.post("/api/import/resolve", json={"names": ["milk", "eggs"]})
+    assert r.status_code == 502
+    assert "Could not reach Kroger" in r.json()["error"]
 
 
 def test_import_commit_merges_and_bumps_quantities(client):

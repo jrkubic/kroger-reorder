@@ -1353,7 +1353,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -1369,6 +1369,11 @@ from .storage import Item, ListLoad, Storage
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 RESOLVE_CANDIDATES = 3
+TRANSPORT_FAILURE_LIMIT = 3  # consecutive status-0 errors before a price refresh gives up
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 class StoreChoice(BaseModel):
@@ -1454,7 +1459,8 @@ def create_app(storage: Storage, kroger) -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, exc: RequestValidationError):
-        first = exc.errors()[0] if exc.errors() else {}
+        errors = exc.errors()
+        first = errors[0] if errors else {}
         loc = ".".join(str(p) for p in first.get("loc", []) if p != "body")
         return error(422, f"Invalid request: {loc or 'body'} {first.get('msg', '')}".strip())
 
@@ -1533,7 +1539,9 @@ def create_app(storage: Storage, kroger) -> FastAPI:
         name = clean_name(body.name)
         if not name:
             return error(400, "Give the list a name.")
-        get_list(slug)
+        loaded = get_list(slug)
+        if loaded.warning:  # saving would back up the file and write an empty list under the new name
+            return error(400, f"Fix or delete this list's file before renaming it. {loaded.warning}")
         storage.rename_list(slug, name)
         return {"slug": slug, "name": name}
 
@@ -1542,7 +1550,9 @@ def create_app(storage: Storage, kroger) -> FastAPI:
         name = clean_name(body.name)
         if not name:
             return error(400, "Give the copy a name.")
-        get_list(slug)
+        loaded = get_list(slug)
+        if loaded.warning:  # the copy would silently be empty
+            return error(400, f"Can't copy a list whose file is unreadable. {loaded.warning}")
         return {"slug": storage.duplicate_list(slug, name)}
 
     @app.delete("/api/lists/{slug}")
@@ -1568,7 +1578,9 @@ def create_app(storage: Storage, kroger) -> FastAPI:
     def add_item(slug: str, new: NewItem):
         loaded = get_list(slug)
         if not any(i.upc == new.upc for i in loaded.items):
-            loaded.items.append(Item(**new.model_dump()))
+            # A price that came along with the add was fetched just now, so stamp it like a refresh would.
+            checked = utc_now() if new.price is not None or new.promo is not None else None
+            loaded.items.append(Item(**new.model_dump(), price_checked_at=checked))
             storage.save_list(slug, loaded.name, loaded.items)
         return list_payload(get_list(slug))
 
@@ -1595,21 +1607,26 @@ def create_app(storage: Storage, kroger) -> FastAPI:
         loaded = get_list(slug)
         if not loaded.items:
             return list_payload(loaded, failed=0)
-        failed, last_error = 0, None
-        now = datetime.now().isoformat(timespec="seconds")
+        succeeded, streak, last_error = 0, 0, None
+        now = utc_now()
         for item in loaded.items:
             try:
                 fresh = kroger.lookup_product(item.upc, sid)
             except KrogerError as exc:
-                failed += 1
                 last_error = exc
+                # Transport failures (status 0) aren't about this item; after a few in a row, stop hammering.
+                streak = streak + 1 if exc.status == 0 else 0
+                if streak >= TRANSPORT_FAILURE_LIMIT:
+                    break
                 continue
+            succeeded += 1
+            streak = 0
             item.price, item.promo, item.price_checked_at = fresh.get("price"), fresh.get("promo"), now
             item.image = fresh.get("image") or item.image
-        if failed == len(loaded.items):
+        if not succeeded:
             return error(502, f"Couldn't check prices: {kroger_message(last_error)}")
         storage.save_list(slug, loaded.name, loaded.items)
-        return list_payload(get_list(slug), failed=failed)
+        return list_payload(get_list(slug), failed=len(loaded.items) - succeeded)
 
     @app.post("/api/lists/{slug}/push")
     def push(slug: str, models: list[ItemModel]):
@@ -1626,7 +1643,8 @@ def create_app(storage: Storage, kroger) -> FastAPI:
             raise
         except KrogerError as exc:
             # Whole-token match so "1111041" is not flagged when Kroger rejects "0001111041700".
-            bad = [i.upc for i in chosen if re.search(rf"(?<!\d){re.escape(i.upc)}(?!\d)", exc.message)]
+            bad = [i.upc for i in chosen
+                   if re.search(rf"(?<!\d){re.escape(i.upc)}(?!\d)", exc.message)]
             return error(502, kroger_message(exc), bad_upcs=bad)
         return {"added": [asdict(i) for i in chosen]}
 
@@ -1643,13 +1661,16 @@ def create_app(storage: Storage, kroger) -> FastAPI:
         sid = store_id()
         if not sid:
             return error(400, "Pick a store first.")
-        matches = []
+        matches, failed, last_error = [], 0, None
         for name in body.names:
             try:
                 candidates = kroger.search_products(name, sid)[:RESOLVE_CANDIDATES]
-            except KrogerError:
-                candidates = []
+            except KrogerError as exc:
+                candidates, failed, last_error = [], failed + 1, exc
             matches.append({"name": name, "candidates": candidates})
+        if body.names and failed == len(body.names):
+            # One name with no hits is normal; every name failing means Kroger itself is the problem.
+            return error(502, f"Couldn't look up any items: {kroger_message(last_error)}")
         return {"matches": matches}
 
     @app.post("/api/lists/{slug}/import")
@@ -1679,7 +1700,7 @@ printf '// replaced in Task 6\n' > app/static/app.js
 **Step 5: Run everything**
 
 Run: `.venv/Scripts/python -m pytest -q`
-Expected: `30 + 25 + 13 + 5 + 39 = 112 passed` (storage, kroger, importer, settings, routes). If the count differs slightly, make sure every file is green rather than chasing the number.
+Expected: `30 + 29 + 18 + 5 + 46 = 128 passed` (storage, kroger, importer, settings, routes). If the count differs slightly, make sure every file is green rather than chasing the number.
 
 **Step 6: Commit**
 
