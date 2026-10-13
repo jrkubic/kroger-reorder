@@ -158,6 +158,37 @@ def test_lookup_product_parses_single_product(client, server):
     assert req.url.params["filter.locationId"] == "01400943"
 
 
+def test_image_url_prefers_medium_then_large_over_thumbnail():
+    product = {"images": [{"perspective": "front", "sizes": [
+        {"size": "thumbnail", "url": "https://img/t.jpg"},
+        {"size": "small", "url": "https://img/s.jpg"},
+        {"size": "large", "url": "https://img/l.jpg"},
+        {"size": "xlarge", "url": "https://img/xl.jpg"},
+    ]}]}
+    assert KrogerClient._image_url(product) == "https://img/l.jpg"
+
+
+def test_image_url_is_none_without_usable_images():
+    assert KrogerClient._image_url({"images": None}) is None
+    assert KrogerClient._image_url({"images": [{"perspective": "front", "sizes": [{"size": "medium"}]}]}) is None
+
+
+def test_summarize_treats_zero_regular_price_as_none(client):
+    product = {"upc": "0001", "description": "Free Sample", "items": [{"price": {"regular": 0, "promo": 0}}]}
+    summary = client._summarize(product)
+    assert summary["price"] is None
+    assert summary["promo"] is None
+
+
+def test_lookup_product_without_data_is_kroger_error(client, server):
+    server.queue(200, TOKEN)
+    server.queue(200, {})
+    with pytest.raises(KrogerError) as info:
+        client.lookup_product("0001111041700", "01400943")
+    assert info.value.status == 502
+    assert "no product data" in info.value.message
+
+
 def test_kroger_error_message_is_parsed_from_body(client, server):
     server.queue(200, TOKEN)
     server.queue(400, {"errors": {"timestamp": 1, "code": "PRODUCT-2001-400", "reason": "filter.term is required"}})

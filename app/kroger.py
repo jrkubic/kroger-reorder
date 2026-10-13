@@ -18,6 +18,8 @@ APP_SCOPE = "product.compact"
 USER_SCOPE = "cart.basic:write"
 # Treat a token as expired a minute early so an in-flight call never uses a dead one.
 EXPIRY_MARGIN_SECONDS = 60
+# Product image sizes, best first; the page shows a small thumbnail so medium is plenty.
+IMAGE_SIZE_PREFERENCE = ("medium", "large", "small", "xlarge", "thumbnail")
 
 
 class KrogerError(Exception):
@@ -126,17 +128,17 @@ class KrogerClient:
 
     @staticmethod
     def _image_url(product: dict) -> str | None:
-        """Medium front image if available, else the first image of any size."""
+        """Front image first; within an image, the best size per IMAGE_SIZE_PREFERENCE, else any url."""
         images = product.get("images") or []
         ordered = sorted(images, key=lambda im: 0 if im.get("perspective") == "front" or im.get("featured") else 1)
         for image in ordered:
-            sizes = image.get("sizes") or []
-            for size in sizes:
-                if size.get("size") == "medium" and size.get("url"):
-                    return size["url"]
-            for size in sizes:
-                if size.get("url"):
-                    return size["url"]
+            by_size = {s.get("size"): s.get("url") for s in (image.get("sizes") or []) if s.get("url")}
+            if not by_size:
+                continue
+            for preferred in IMAGE_SIZE_PREFERENCE:
+                if preferred in by_size:
+                    return by_size[preferred]
+            return next(iter(by_size.values()))
         return None
 
     def _summarize(self, product: dict) -> dict:
@@ -147,7 +149,7 @@ class KrogerClient:
             "name": product.get("description", ""),
             "brand": product.get("brand", ""),
             "size": item.get("size", ""),
-            "price": price.get("regular"),
+            "price": price.get("regular") or None,
             "promo": price.get("promo") or None,
             "image": self._image_url(product),
         }
@@ -162,7 +164,10 @@ class KrogerClient:
 
     def lookup_product(self, upc: str, location_id: str) -> dict:
         body = self._get(f"/products/{upc}", self.app_token(), {"filter.locationId": location_id})
-        return self._summarize(body["data"])
+        data = body.get("data")
+        if not isinstance(data, dict) or "upc" not in data:
+            raise KrogerError(502, f"Kroger returned no product data for {upc}")
+        return self._summarize(data)
 
     # -- user token: OAuth authorization-code flow, needed for the cart ----
     def authorize_url(self) -> str:

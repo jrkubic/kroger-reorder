@@ -696,7 +696,7 @@ Replace `search_products` in `app/kroger.py` with the three methods below (keep 
 **Step 4: Run**
 
 Run: `.venv/Scripts/python -m pytest tests/test_kroger.py -q`
-Expected: `29 passed`.
+Expected: `25 passed`.
 
 **Step 5: Commit**
 
