@@ -287,6 +287,14 @@ def test_add_item_without_price_is_not_stamped(client):
     assert r.json()["items"] == [{**EGGS, **FULL}]
 
 
+def test_null_size_from_kroger_is_accepted_and_stored_as_empty(client, storage):
+    r = client.post("/api/lists/standard/items", json={"upc": "0003", "name": "Bread", "size": None})
+    assert r.status_code == 200
+    r = client.post("/api/lists/standard/import", json=[{"upc": "0004", "name": "Jam", "size": None, "image": None}])
+    assert r.status_code == 200
+    assert [i.size for i in storage.load_list("standard").items] == ["", ""]
+
+
 def test_replace_items_saves_quantities_and_flags(client, storage):
     body = [{**MILK, **FULL, "quantity": 3, "included": False}, {**EGGS, **FULL}]
     r = client.put("/api/lists/standard/items", json=body)
@@ -384,6 +392,25 @@ def test_refresh_prices_on_empty_list_is_noop(client, with_store, kroger):
     r = client.post("/api/lists/standard/prices")
     assert r.status_code == 200
     assert kroger.lookup_calls == []
+
+
+def test_refresh_prices_merges_into_latest_list_state(client, kroger, storage, with_store):
+    # The lookups are slow; the user may edit the list meanwhile. The refresh must not revert those edits.
+    client.post("/api/lists/standard/items", json=MILK)
+    client.post("/api/lists/standard/items", json=EGGS)
+
+    def lookup(upc, location_id):
+        if upc == "0001":  # mid-refresh: user unchecks milk and removes eggs
+            storage.save_list("standard", "Standard", [Item(**MILK, included=False)])
+        return product(upc, f"Looked up {upc}", price=5.0, promo=4.0)
+    kroger.lookup_product = lookup
+
+    r = client.post("/api/lists/standard/prices")
+    assert r.status_code == 200
+    [milk] = r.json()["items"]
+    assert milk["included"] is False
+    assert milk["price"] == 5.0 and milk["price_checked_at"]
+    assert r.json()["failed"] == 0
 
 
 def test_refresh_prices_stops_after_three_transport_failures(client, kroger, with_store):

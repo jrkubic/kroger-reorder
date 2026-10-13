@@ -1392,7 +1392,7 @@ class ActiveChoice(BaseModel):
 class NewItem(BaseModel):
     upc: str
     name: str
-    size: str = ""
+    size: str | None = None  # Kroger sometimes sends null; stored as ""
     image: str | None = None
     price: float | None = None
     promo: float | None = None
@@ -1421,7 +1421,7 @@ class ResolveRequest(BaseModel):
 class ImportItem(BaseModel):
     upc: str
     name: str
-    size: str = ""
+    size: str | None = None  # Kroger sometimes sends null; stored as ""
     image: str | None = None
     quantity: int = 1
 
@@ -1580,7 +1580,7 @@ def create_app(storage: Storage, kroger) -> FastAPI:
         if not any(i.upc == new.upc for i in loaded.items):
             # A price that came along with the add was fetched just now, so stamp it like a refresh would.
             checked = utc_now() if new.price is not None or new.promo is not None else None
-            loaded.items.append(Item(**new.model_dump(), price_checked_at=checked))
+            loaded.items.append(Item(**new.model_dump() | {"size": new.size or ""}, price_checked_at=checked))
             storage.save_list(slug, loaded.name, loaded.items)
         return list_payload(get_list(slug))
 
@@ -1607,11 +1607,12 @@ def create_app(storage: Storage, kroger) -> FastAPI:
         loaded = get_list(slug)
         if not loaded.items:
             return list_payload(loaded, failed=0)
-        succeeded, streak, last_error = 0, 0, None
+        fresh_by_upc: dict[str, dict] = {}
+        streak, last_error = 0, None
         now = utc_now()
         for item in loaded.items:
             try:
-                fresh = kroger.lookup_product(item.upc, sid)
+                fresh_by_upc[item.upc] = kroger.lookup_product(item.upc, sid)
             except KrogerError as exc:
                 last_error = exc
                 # Transport failures (status 0) aren't about this item; after a few in a row, stop hammering.
@@ -1619,14 +1620,20 @@ def create_app(storage: Storage, kroger) -> FastAPI:
                 if streak >= TRANSPORT_FAILURE_LIMIT:
                     break
                 continue
-            succeeded += 1
             streak = 0
-            item.price, item.promo, item.price_checked_at = fresh.get("price"), fresh.get("promo"), now
-            item.image = fresh.get("image") or item.image
-        if not succeeded:
+        if not fresh_by_upc:
             return error(502, f"Couldn't check prices: {kroger_message(last_error)}")
-        storage.save_list(slug, loaded.name, loaded.items)
-        return list_payload(get_list(slug), failed=len(loaded.items) - succeeded)
+        # The lookups are slow and the user may have edited the list meanwhile (unchecked or removed
+        # an item). Merge the prices into the list as it is *now* rather than saving our old snapshot.
+        current = get_list(slug)
+        for item in current.items:
+            fresh = fresh_by_upc.get(item.upc)
+            if fresh:
+                item.price, item.promo, item.price_checked_at = fresh.get("price"), fresh.get("promo"), now
+                item.image = fresh.get("image") or item.image
+        storage.save_list(slug, current.name, current.items)
+        # `failed` is the number of items we set out to check and couldn't, including any skipped after bailing out.
+        return list_payload(get_list(slug), failed=len(loaded.items) - len(fresh_by_upc))
 
     @app.post("/api/lists/{slug}/push")
     def push(slug: str, models: list[ItemModel]):
@@ -1681,7 +1688,8 @@ def create_app(storage: Storage, kroger) -> FastAPI:
             if pick.upc in by_upc:
                 by_upc[pick.upc].quantity += max(1, pick.quantity)
             else:
-                item = Item(upc=pick.upc, name=pick.name, size=pick.size, image=pick.image, quantity=max(1, pick.quantity))
+                item = Item(upc=pick.upc, name=pick.name, size=pick.size or "", image=pick.image,
+                            quantity=max(1, pick.quantity))
                 loaded.items.append(item)
                 by_upc[pick.upc] = item
         if picks:
@@ -1700,7 +1708,7 @@ printf '// replaced in Task 6\n' > app/static/app.js
 **Step 5: Run everything**
 
 Run: `.venv/Scripts/python -m pytest -q`
-Expected: `30 + 29 + 18 + 5 + 46 = 128 passed` (storage, kroger, importer, settings, routes). If the count differs slightly, make sure every file is green rather than chasing the number.
+Expected: `30 + 29 + 18 + 5 + 48 = 130 passed` (storage, kroger, importer, settings, routes). If the count differs slightly, make sure every file is green rather than chasing the number.
 
 **Step 6: Commit**
 
