@@ -20,8 +20,8 @@ def envelope(result, **over):
 def fake_runner(returncode=0, stdout="", stderr=""):
     calls = []
 
-    def run(args, timeout):
-        calls.append((args, timeout))
+    def run(args, stdin_text, timeout):
+        calls.append((args, stdin_text, timeout))
         return RunResult(returncode, stdout, stderr)
     run.calls = calls
     return run
@@ -77,12 +77,14 @@ def test_analyze_runs_cli_with_photos_and_parses_result():
     run = fake_runner(stdout=envelope(json.dumps(GOOD)))
     out = analyze(PHOTOS, "note", "history", model="claude-opus-5", timeout=42, runner=run, which=which_ok)
     assert [s.name for s in out] == ["whole milk", "large eggs"]
-    (args, timeout), = run.calls
+    (args, stdin_text, timeout), = run.calls
     assert args[0] == r"C:\tools\claude.cmd" and args[1] == "-p"
     assert "--output-format" in args and "json" in args
     assert args[args.index("--allowedTools") + 1] == "Read"
     assert args[args.index("--model") + 1] == "claude-opus-5"
-    assert "note" in args[2] and "history" in args[2]
+    # The prompt goes on stdin, never as an argument: the Windows .CMD shim truncates multi-line args.
+    assert not any("\n" in a for a in args)
+    assert "note" in stdin_text and "history" in stdin_text and "a.jpg" in stdin_text
     assert timeout == 42
 
 
@@ -114,7 +116,7 @@ def test_analyze_non_json_stdout_is_502():
 
 
 def test_analyze_timeout_bubbles_as_504():
-    def slow(args, timeout):
+    def slow(args, stdin_text, timeout):
         raise VisionError(504, "too slow")
     with pytest.raises(VisionError) as exc:
         analyze(PHOTOS, "", "", model="m", timeout=5, runner=slow, which=which_ok)

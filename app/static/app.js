@@ -303,6 +303,8 @@ $('list-section').addEventListener('click', async (e) => {
       await switchList(data.active_list);
     } else if (action === 'import') {
       openImport();
+    } else if (action === 'photo') {
+      openPhoto();
     } else if (action === 'export') {
       const a = document.createElement('a');
       a.href = listPath('/export.csv');
@@ -333,25 +335,30 @@ $('import-file').onchange = async (e) => {
 
 $('import-text').oninput = () => { importRows = []; $('import-review').classList.add('hidden'); };
 
+// Match parsed lines against the store catalog and show the review table.
+// Rows with a UPC (an exported CSV) are exact products; only the rest need a catalog search.
+async function reviewLines(lines, bannerEl) {
+  const toResolve = lines.filter(l => !l.exact);
+  let matches = [];
+  if (toResolve.length) {
+    banner('warn', `Looking up ${plural(toResolve.length, 'item')} at your store…`, false, bannerEl);
+    ({ matches } = await api('POST', '/api/import/resolve', { names: toResolve.map(l => l.name) }));
+  }
+  let next = 0;
+  importRows = lines.map(l => l.exact
+    ? { ...l, candidates: [{ ...l.exact, name: l.name, fromFile: true }] }
+    : { ...l, candidates: matches[next++].candidates });
+  banner(null, '', false, bannerEl);
+  renderImport();
+}
+
 $('import-parse').onclick = async () => {
   $('import-parse').disabled = true;
   banner(null, '', false, $('import-banner'));
   const text = $('import-text').value;
   try {
     const { lines } = await api('POST', '/api/import/parse', { text });
-    // Rows with a UPC (an exported CSV) are exact products; only the rest need a catalog search.
-    const toResolve = lines.filter(l => !l.exact);
-    let matches = [];
-    if (toResolve.length) {
-      banner('warn', `Looking up ${plural(toResolve.length, 'item')} at your store…`, false, $('import-banner'));
-      ({ matches } = await api('POST', '/api/import/resolve', { names: toResolve.map(l => l.name) }));
-    }
-    let next = 0;
-    importRows = lines.map(l => l.exact
-      ? { ...l, candidates: [{ ...l.exact, name: l.name, fromFile: true }] }
-      : { ...l, candidates: matches[next++].candidates });
-    banner(null, '', false, $('import-banner'));
-    renderImport();
+    await reviewLines(lines, $('import-banner'));
   } catch (e) {
     banner('error', e.message, false, $('import-banner'));
   } finally {
@@ -367,8 +374,10 @@ function renderImport() {
     const options = row.candidates.map((c, ci) =>
       `<option value="${ci}" ${ci === 0 ? 'selected' : ''}>${c.fromFile ? 'From file: ' : ''}${esc(c.name)}${c.size ? ' · ' + esc(c.size) : ''}${c.price != null || c.promo != null ? ' · ' + money(c.promo ?? c.price) : ''}</option>`
     ).join('');
+    const kind = row.kind ? `<span class="kind ${esc(row.kind)}">${esc(row.kind)}</span>` : '';
+    const sub = row.kind ? (row.reason || '') : row.raw;
     tr.innerHTML = `
-      <td><div>${esc(row.name)}</div><div class="raw">${esc(row.raw)}</div></td>
+      <td><div>${kind}${esc(row.name)}</div><div class="raw">${esc(sub)}</div></td>
       <td><input type="number" min="1" value="${row.quantity}" data-import-qty="${idx}"></td>
       <td><select data-import-pick="${idx}">${options}<option value="-1" ${row.candidates.length ? '' : 'selected'}>${row.candidates.length ? 'Skip this line' : 'No match found — skip'}</option></select></td>`;
     tbody.appendChild(tr);
@@ -412,6 +421,119 @@ $('import-commit').onclick = async () => {
     $('import-commit').disabled = false;
   }
 };
+
+// -- photo suggestions ------------------------------------------------------------------------
+
+const PHOTO_MAX = 4;
+const PHOTO_EDGE = 1600;   // longest side after downscaling, keeps uploads small and under Claude's limits
+let photoFiles = [];       // [{media_type, data, url}] ready to send
+
+function openPhoto() {
+  photoFiles = [];
+  $('photo-files').value = '';
+  $('photo-note').value = '';
+  $('photo-thumbs').innerHTML = '';
+  $('photo-go').disabled = true;
+  banner(null, '', false, $('photo-banner'));
+  const sel = $('photo-list'); sel.innerHTML = '';
+  state.lists.forEach(l => {
+    const opt = document.createElement('option');
+    opt.value = l.slug; opt.textContent = l.name; opt.selected = l.slug === state.active_list;
+    sel.appendChild(opt);
+  });
+  const fresh = document.createElement('option');
+  fresh.value = '__new__'; fresh.textContent = 'New list…';
+  sel.appendChild(fresh);
+  $('photo-dialog').showModal();
+}
+
+$('photo-close').onclick = () => $('photo-dialog').close();
+
+// Shrink a photo in the browser: phone pictures are 3-12 MB; 1600px JPEG is plenty for Claude.
+function shrinkPhoto(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, PHOTO_EDGE / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      resolve({ media_type: 'image/jpeg', data: dataUrl.split(',')[1], url: dataUrl });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error(`Couldn't read ${file.name}.`)); };
+    img.src = url;
+  });
+}
+
+$('photo-files').onchange = async (e) => {
+  const files = Array.from(e.target.files || []).slice(0, PHOTO_MAX);
+  banner(null, '', false, $('photo-banner'));
+  if ((e.target.files || []).length > PHOTO_MAX) banner('warn', `Only the first ${PHOTO_MAX} photos will be used.`, false, $('photo-banner'));
+  try {
+    photoFiles = await Promise.all(files.map(shrinkPhoto));
+    $('photo-thumbs').innerHTML = photoFiles.map(p => `<img src="${p.url}" alt="">`).join('');
+    $('photo-go').disabled = photoFiles.length === 0;
+  } catch (err) {
+    photoFiles = [];
+    $('photo-thumbs').innerHTML = '';
+    $('photo-go').disabled = true;
+    banner('error', err.message, false, $('photo-banner'));
+  }
+};
+
+$('photo-go').onclick = async () => {
+  const pbanner = $('photo-banner');
+  if (!photoFiles.length) return;
+  $('photo-go').disabled = true;
+  try {
+    // Decide where the items will go first, so the review lands on that list.
+    let slug = $('photo-list').value;
+    if (slug === '__new__') {
+      const name = prompt('Name for the new list:');
+      if (!name?.trim()) { $('photo-go').disabled = false; return; }
+      ({ slug } = await api('POST', '/api/lists', { name }));
+      await refreshLists();
+    }
+    banner('warn', 'Claude is looking at your photos… this takes 10 to 30 seconds.', false, pbanner);
+    const { lines } = await api('POST', '/api/photo/suggest', {
+      photos: photoFiles.map(({ media_type, data }) => ({ media_type, data })),
+      note: $('photo-note').value,
+    });
+    if (slug !== state.active_list) await switchList(slug);
+    $('photo-dialog').close();
+    openImport();
+    banner('warn', `Claude suggested ${plural(lines.length, 'item')}. Matching them to your store…`, false, $('import-banner'));
+    await reviewLines(lines, $('import-banner'));
+  } catch (err) {
+    banner('error', err.message, false, $('photo-dialog').open ? pbanner : $('import-banner'));
+  } finally {
+    $('photo-go').disabled = photoFiles.length === 0;
+  }
+};
+
+// -- usage profile ----------------------------------------------------------------------------
+
+function renderUsage(items) {
+  const tbody = $('usage-table').querySelector('tbody');
+  tbody.innerHTML = '';
+  items.forEach(r => {
+    const tr = document.createElement('tr');
+    const last = r.days_since_last == null ? '' : r.days_since_last === 0 ? 'today' : `${plural(r.days_since_last, 'day')} ago`;
+    const every = r.avg_days_between == null ? '' : `${Math.round(r.avg_days_between)} days`;
+    tr.innerHTML = `<td>${esc(r.name || r.upc)}</td><td>${r.times}×</td><td>${r.avg_quantity}</td><td>${last}</td><td>${every}</td>`;
+    tbody.appendChild(tr);
+  });
+  $('usage-table').classList.toggle('hidden', items.length === 0);
+  $('usage-empty').classList.toggle('hidden', items.length > 0);
+}
+
+async function loadUsage() {
+  renderUsage((await api('GET', '/api/usage')).items);
+}
 
 // -- orders dialog ---------------------------------------------------------------------------
 
@@ -472,6 +594,7 @@ function showTab(name) {
   if (onOrders) {
     banner(null, '', false, $('orders-banner'));
     loadOrders().catch(e => banner('error', e.message, false, $('orders-banner')));
+    loadUsage().catch(e => banner('error', e.message, false, $('orders-banner')));
   }
 }
 

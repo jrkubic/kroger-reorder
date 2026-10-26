@@ -46,6 +46,8 @@ Runs on one Windows PC, is reachable from every phone on the same wifi, and stor
 - **Order history.** Every successful send is recorded with date, list, items, and an estimated total. Any past order can be sent to the cart again or deleted.
 - **Import.** Plain text, Markdown checklists, CSV, TSV from a spreadsheet, JSON, or the app's own export. Reviewed in a table before adding.
 - **Export.** Download any list as CSV. Re-importing it recreates the list exactly, on this or another install.
+- **Photo suggestions.** Photograph your fridge, pantry or cupboard from any device on the wifi, add a note, and Claude proposes a list: what it sees, what looks low or missing, and what your note asks for. Every line is reviewed against the store catalog before it is added.
+- **Usage profile.** Derived from order history: how often you buy each item, the usual quantity, and when it is due again. Shown on the Orders tab and used to make photo suggestions smarter over time.
 - **Phone access.** The server binds to your LAN. Sign in once on the PC and every device shares it.
 - **Start with Windows.** One script installs a hidden startup entry so the app is always available.
 - **Plain files.** Lists, config, tokens, and history are JSON under `data/`. Corrupt files are moved aside, never deleted.
@@ -62,10 +64,11 @@ Runs on one Windows PC, is reachable from every phone on the same wifi, and stor
 | Configuration | [python-dotenv](https://github.com/theskumar/python-dotenv) | Loads credentials from `.env` |
 | Front end | HTML5, CSS, vanilla JavaScript (ES2020) | One page, no build step, no framework |
 | Persistence | JSON files | One file per list, plus config, tokens, and orders |
-| Testing | [pytest](https://docs.pytest.org/) with Starlette `TestClient` | 160 tests, no network access |
+| Testing | [pytest](https://docs.pytest.org/) with Starlette `TestClient` | 183 tests, no network access |
 | Packaging | `pyproject.toml` with setuptools | `pip install -e .` and a `kroger-reorder` console script |
 | Automation | PowerShell 5.1 | Windows startup installer |
 | External API | [Kroger Public API](https://developer.kroger.com/) | Locations, Products, Cart, OAuth 2.0 |
+| Vision | [Claude Code](https://code.claude.com/docs) run headlessly (`claude -p`) with Claude Opus 5 | Photo analysis for suggested lists, on the host's Claude subscription |
 
 No JavaScript dependencies or bundler. The page is served as-is from `app/static/`.
 
@@ -80,6 +83,8 @@ kroger-reorder/
 │   ├── storage.py         JSON persistence: lists, config, tokens, order history
 │   ├── orders.py          Builds an order snapshot after a successful send
 │   ├── importer.py        Parses text, Markdown, CSV, TSV, and JSON into lines
+│   ├── vision.py          Photo suggestions through headless Claude Code
+│   ├── usage.py           Usage profile derived from order history
 │   ├── settings.py        Reads credentials and port from .env
 │   └── static/
 │       ├── index.html     The single page and its styles
@@ -190,6 +195,18 @@ Click **Import**, then pick a file or paste text. Accepted shapes:
 
 Each line is matched against your store's catalog. Pick a different match or skip a line in the review table, then click **Add to list**. Items already in the list get their quantity bumped. Rows that carry a `upc` column are added exactly as they are, with no search, and show as "From file".
 
+### Photo suggestions
+
+Click **Photo**, choose which list the items should go to (or **New list…**), then add up to four photos. On a phone the picker offers both the camera and your photo library. Add a note if you like, such as "family of 4, out of eggs, taco night this week", and click **Suggest a list**.
+
+The photos are shrunk in the browser, sent to the PC running the app, and handed to the Claude Code installation there together with your note and your usage profile. After 10 to 30 seconds the import review table opens with every suggestion tagged **seen** (visible in a photo) or **suggested** (looks empty, low, absent, overdue by your history, or asked for in the note), each with a one-line reason and a catalog match you can change or skip. **Add to list** works as for any import. Photos are deleted as soon as the analysis finishes and are never stored.
+
+Requirements: [Claude Code](https://code.claude.com/docs) installed and signed in on the PC running the app. Analyses count against that Claude subscription's usage. `PHOTO_MODEL` and `PHOTO_TIMEOUT` in `.env` change the model (default Claude Opus 5) and the time limit (default 90 seconds).
+
+### Usage profile
+
+The **Usage** table on the Orders tab lists every product you have sent to the cart with how many times, the usual quantity, when you last bought it, and the average days between buys. It is computed from order history each time, so there is nothing extra to maintain, and it is what Claude reads when it suggests restocking.
+
 ### Exporting
 
 Click **Export CSV** to download the current list as `<list>.csv` with these columns:
@@ -256,6 +273,13 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 | `POST` | `/api/import/resolve` | Catalog candidates for each name |
 | `POST` | `/api/lists/{slug}/import` | Add the chosen picks to a list |
 
+### Photo suggestions and usage
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/photo/suggest` | Base64 photos plus a note; returns suggested lines for the import review |
+| `GET` | `/api/usage` | Usage profile derived from order history |
+
 ### Orders
 
 | Method | Path | Purpose |
@@ -300,6 +324,7 @@ Run once after setup, or after changes that touch the Kroger client:
 | v1 Core | [docs/plans/2026-10-12-kroger-reorder-design.md](docs/plans/2026-10-12-kroger-reorder-design.md) | [docs/plans/2026-10-12-kroger-reorder.md](docs/plans/2026-10-12-kroger-reorder.md) |
 | v2 Lists, images, import | [docs/plans/2026-10-12-v2-lists-images-import-design.md](docs/plans/2026-10-12-v2-lists-images-import-design.md) | [docs/plans/2026-10-12-v2-lists-images-import.md](docs/plans/2026-10-12-v2-lists-images-import.md) |
 | v3 Order history | [docs/plans/2026-10-26-order-history-design.md](docs/plans/2026-10-26-order-history-design.md) | [docs/plans/2026-10-26-order-history.md](docs/plans/2026-10-26-order-history.md) |
+| v4 Photo suggestions | [docs/plans/2026-10-26-photo-suggest-design.md](docs/plans/2026-10-26-photo-suggest-design.md) | built directly from the design |
 
 ## Limitations
 
@@ -324,11 +349,15 @@ These come from Kroger's public API, not from the app:
 | Cannot sign in from a phone | Expected. Sign in once from the PC. |
 | Cannot delete a list | The last list cannot be deleted. Create another first. |
 | Buttons do nothing after an update | Reload the page. Versions before v3 could run a stale cached script; this is fixed. |
+| `Claude Code isn't installed...` after **Suggest a list** | Install Claude Code on the PC running the app and sign in, then restart the app so it is on the PATH. |
+| `Claude Code failed: ...` | Usually a sign-in or usage-limit problem on the PC. Run `claude` there once to check, then try again. |
+| Photo analysis times out | Use fewer or clearer photos, or raise `PHOTO_TIMEOUT` in `.env`. |
 
 ## Resources
 
 - Kroger Developer Portal: https://developer.kroger.com/ (register an app, manage credentials)
 - Kroger API documentation: https://developer.kroger.com/documentation/public/ (Authorization, Locations, Products, Cart)
+- Claude Code documentation: https://code.claude.com/docs (headless mode, `--output-format json`)
 - FastAPI: https://fastapi.tiangolo.com/
 - Starlette: https://www.starlette.io/
 - pydantic: https://docs.pydantic.dev/
@@ -345,6 +374,7 @@ These come from Kroger's public API, not from the app:
 | 2026-10-12 | v1 | Store selection, Kroger sign-in, one list, send to cart |
 | 2026-10-12 | v2 | Named lists, product images, sale badges, LAN access, import from text/CSV/JSON/Markdown |
 | 2026-10-26 | v3 | Order history with reorder, Orders tab, CSV export and exact re-import, list header buttons, Windows startup installer, cache-safe script loading |
+| 2026-10-26 | v4 | Photo suggestions through headless Claude Code, usage profile from order history |
 
 ## License
 

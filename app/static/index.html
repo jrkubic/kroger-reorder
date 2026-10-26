@@ -72,6 +72,12 @@
   .orders .details li { border-top:1px solid var(--line); }
   .orders .details li:first-child { border-top:0; }
   .orders .qty { color:var(--muted); font-size:.9rem; white-space:nowrap; }
+  .thumbs { display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 0; }
+  .thumbs img { width:88px; height:88px; object-fit:cover; border-radius:8px; border:1px solid var(--line); }
+  .kind { font-size:.75rem; border-radius:999px; padding:2px 8px; margin-right:6px; vertical-align:middle; }
+  .kind.seen { background:#e4f5ea; color:var(--ok); }
+  .kind.suggested { background:#fff4d6; color:#7a5300; }
+  #usage-table td:not(:first-child), #usage-table th:not(:first-child) { white-space:nowrap; color:var(--muted); }
   .hidden { display:none !important; }
   @media (max-width: 400px) { .thumb { width:44px; height:44px; } .results .thumb { width:36px; height:36px; } .sale, .price { white-space:normal; } }
 </style>
@@ -131,6 +137,7 @@
         </div>
       </div>
       <div class="row">
+        <button class="secondary" data-action="photo" title="Photograph your fridge or pantry and get a suggested list">Photo</button>
         <button class="secondary" data-action="import">Import</button>
         <button class="secondary" data-action="export">Export CSV</button>
       </div>
@@ -154,6 +161,15 @@
     <div id="orders-banner" class="banner"></div>
     <ul id="orders" class="orders"></ul>
     <p id="orders-empty" class="muted hidden">No orders yet. Your next Send to cart will show up here.</p>
+  </section>
+  <section id="usage-section">
+    <h2>Usage</h2>
+    <p class="muted">What this household buys, worked out from the orders above. Photo suggestions use this to spot staples that are overdue.</p>
+    <table id="usage-table">
+      <thead><tr><th>Item</th><th>Bought</th><th>Usually</th><th>Last</th><th>Every</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p id="usage-empty" class="muted hidden">Nothing yet. Usage builds up as you send lists to the cart.</p>
   </section>
   </div>
 </main>
@@ -186,6 +202,26 @@
       <button id="import-commit">Add to list</button>
       <span id="import-summary" class="muted"></span>
     </div>
+  </div>
+</dialog>
+
+<dialog id="photo-dialog">
+  <h2>Suggest a list from photos</h2>
+  <p class="muted">Snap your fridge, freezer, pantry or cupboard. Claude lists what it sees, what looks low or missing, and anything your note asks for. You review every line before it's added.</p>
+  <div class="row">
+    <label class="muted" for="photo-list">Add to</label>
+    <select id="photo-list"></select>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <input id="photo-files" type="file" accept="image/*" multiple>
+    <span class="muted">Up to 4 photos. On a phone you can take a picture or pick from your library.</span>
+  </div>
+  <div id="photo-thumbs" class="thumbs"></div>
+  <textarea id="photo-note" rows="3" placeholder="Anything to add? e.g. family of 4, out of eggs, taco night this week"></textarea>
+  <div id="photo-banner" class="banner"></div>
+  <div class="row">
+    <button id="photo-go" disabled>Suggest a list</button>
+    <button id="photo-close" class="secondary">Cancel</button>
   </div>
 </dialog>
 

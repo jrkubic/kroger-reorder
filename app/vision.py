@@ -56,12 +56,15 @@ class RunResult:
     stderr: str
 
 
-Runner = Callable[[list[str], float], RunResult]
+Runner = Callable[[list[str], str, float], RunResult]
 
 
-def run_cli(args: list[str], timeout: float) -> RunResult:
+def run_cli(args: list[str], stdin_text: str, timeout: float) -> RunResult:
+    """Run the CLI with the prompt on stdin. On Windows `claude` is a .CMD shim, and cmd.exe cuts a
+    multi-line argument at the first newline, so the prompt must never travel as an argument."""
     try:
-        proc = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+        proc = subprocess.run(args, input=stdin_text, capture_output=True, text=True, encoding="utf-8",
+                              timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         raise VisionError(504, f"Claude took longer than {int(timeout)} seconds; try fewer or smaller photos.") from exc
     return RunResult(proc.returncode, proc.stdout or "", proc.stderr or "")
@@ -130,11 +133,10 @@ def analyze(photos: list[Path], note: str, profile: str, *, model: str, timeout:
     exe = which("claude")
     if not exe:
         raise VisionError(503, "Claude Code isn't installed on the computer running the app, so photos can't be analyzed.")
-    args = [exe, "-p", build_prompt(photos, note, profile), "--output-format", "json",
-            "--allowedTools", "Read", "--max-turns", "6"]
+    args = [exe, "-p", "--output-format", "json", "--allowedTools", "Read", "--max-turns", "6"]
     if model:
         args += ["--model", model]
-    result = runner(args, timeout)
+    result = runner(args, build_prompt(photos, note, profile), timeout)
     if result.returncode != 0:
         tail = (result.stderr.strip().splitlines() or result.stdout.strip().splitlines() or ["no details"])[-1]
         raise VisionError(502, f"Claude Code failed: {tail}")
