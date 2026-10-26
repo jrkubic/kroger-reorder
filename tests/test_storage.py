@@ -338,3 +338,56 @@ def test_concurrent_reads_and_writes_do_not_crash(tmp_path):
 
     errors = _run_threads([reader, reader, reader, writer])
     assert errors == []
+
+
+# -- orders -----------------------------------------------------------------
+
+def order(order_id, placed_at):
+    return {"id": order_id, "placed_at": placed_at, "list_slug": "standard", "list_name": "Standard",
+            "store_id": None, "store_name": None, "reorder_of": None, "items": [], "estimated_total": None,
+            "item_count": 0}
+
+
+def test_orders_start_empty_without_creating_a_file(tmp_path):
+    s = Storage(tmp_path)
+    assert s.list_orders() == []
+    assert not (tmp_path / "orders.json").exists()
+
+
+def test_record_list_get_delete_round_trip(tmp_path):
+    s = Storage(tmp_path)
+    s.record_order(order("a", "2026-10-26T13:00:00+00:00"))
+    s.record_order(order("b", "2026-10-26T14:00:00+00:00"))
+    assert [o["id"] for o in s.list_orders()] == ["b", "a"]
+    assert s.get_order("a")["placed_at"] == "2026-10-26T13:00:00+00:00"
+    assert s.get_order("zzz") is None
+    assert s.delete_order("a") is True
+    assert s.delete_order("a") is False
+    assert [o["id"] for o in s.list_orders()] == ["b"]
+    raw = json.loads((tmp_path / "orders.json").read_text(encoding="utf-8"))
+    assert raw == {"orders": [order("b", "2026-10-26T14:00:00+00:00")]}
+
+
+def test_list_orders_sorts_newest_first_even_if_file_is_out_of_order(tmp_path):
+    (tmp_path / "orders.json").write_text(json.dumps({"orders": [
+        order("old", "2026-01-01T00:00:00+00:00"), order("new", "2026-10-26T00:00:00+00:00")]}), encoding="utf-8")
+    assert [o["id"] for o in Storage(tmp_path).list_orders()] == ["new", "old"]
+
+
+def test_corrupt_orders_file_is_backed_up_and_treated_as_empty(tmp_path):
+    (tmp_path / "orders.json").write_text("{not json", encoding="utf-8")
+    s = Storage(tmp_path)
+    assert s.list_orders() == []
+    assert list(tmp_path.glob("orders.json.corrupt-*"))
+    s.record_order(order("a", "2026-10-26T13:00:00+00:00"))
+    assert [o["id"] for o in s.list_orders()] == ["a"]
+
+
+def test_wrong_shape_orders_file_is_backed_up_and_entries_without_id_are_skipped(tmp_path):
+    (tmp_path / "orders.json").write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    s = Storage(tmp_path)
+    assert s.list_orders() == []
+    assert list(tmp_path.glob("orders.json.corrupt-*"))
+    (tmp_path / "orders.json").write_text(json.dumps({"orders": [{"placed_at": "x"}, order("ok", "2026-10-26T13:00:00+00:00")]}),
+                                          encoding="utf-8")
+    assert [o["id"] for o in s.list_orders()] == ["ok"]

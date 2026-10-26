@@ -1,5 +1,5 @@
 # app/storage.py
-"""Plain-JSON persistence: named grocery lists, store config, and Kroger tokens."""
+"""Plain-JSON persistence: named grocery lists, order history, store config, and Kroger tokens."""
 from __future__ import annotations
 
 import json
@@ -15,6 +15,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 LISTS_DIR = "lists"
 LEGACY_LIST = "list.json"
 DEFAULT_LIST_NAME = "Standard"
+ORDERS_FILE = "orders.json"
 
 UNTOUCHED = " Showing an empty list; the file is untouched until you add an item."
 
@@ -256,3 +257,38 @@ class Storage:
 
     def clear_tokens(self) -> None:
         self._path("tokens.json").unlink(missing_ok=True)
+
+    # -- order history -------------------------------------------------------
+    def _load_orders(self) -> list[dict]:
+        """Orders as stored. A corrupt or wrong-shaped file is backed up and treated as empty."""
+        with self._lock:
+            try:
+                raw = self._read(ORDERS_FILE)
+            except ValueError:
+                self._backup(ORDERS_FILE)
+                return []
+            if raw is None:
+                return []
+            if not isinstance(raw, dict) or not isinstance(raw.get("orders"), list):
+                self._backup(ORDERS_FILE)
+                return []
+            return [o for o in raw["orders"] if isinstance(o, dict) and o.get("id")]
+
+    def list_orders(self) -> list[dict]:
+        return sorted(self._load_orders(), key=lambda o: str(o.get("placed_at", "")), reverse=True)
+
+    def get_order(self, order_id: str) -> dict | None:
+        return next((o for o in self._load_orders() if o["id"] == order_id), None)
+
+    def record_order(self, order: dict) -> None:
+        with self._lock:
+            self._write(ORDERS_FILE, {"orders": [order, *self._load_orders()]})
+
+    def delete_order(self, order_id: str) -> bool:
+        with self._lock:
+            orders = self._load_orders()
+            kept = [o for o in orders if o["id"] != order_id]
+            if len(kept) == len(orders):
+                return False
+            self._write(ORDERS_FILE, {"orders": kept})
+            return True
