@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -173,9 +173,20 @@ def create_app(storage: Storage, kroger) -> FastAPI:
         return order, None
 
     # -- page / setup -----------------------------------------------------------------
+    @app.middleware("http")
+    async def revalidate_page_assets(request: Request, call_next):
+        # Browsers cache static files heuristically and keep using an old app.js against a new
+        # page after an update, which silently breaks every handler. Make them revalidate (ETag).
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     @app.get("/")
     def index():
-        return FileResponse(STATIC_DIR / "index.html")
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        stamp = int((STATIC_DIR / "app.js").stat().st_mtime)
+        return HTMLResponse(html.replace('src="/static/app.js"', f'src="/static/app.js?v={stamp}"'))
 
     @app.get("/api/state")
     def state():

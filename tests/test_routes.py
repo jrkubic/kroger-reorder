@@ -1,5 +1,6 @@
 # tests/test_routes.py
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -168,6 +169,18 @@ def test_index_and_static_js_are_served(client):
     r = client.get("/static/app.js")
     assert r.status_code == 200
     assert "javascript" in r.headers["content-type"]
+
+
+def test_index_versions_the_script_and_disables_stale_caching(client):
+    # A browser that cached an old app.js must not run it against a newer page: the script URL
+    # changes whenever the file does, and both page and static files must always be revalidated.
+    r = client.get("/")
+    assert r.headers["cache-control"] == "no-cache"
+    m = re.search(r'src="/static/app\.js\?v=(\d+)"', r.text)
+    assert m, "index.html should reference a versioned app.js"
+    js = client.get(f"/static/app.js?v={m.group(1)}")
+    assert js.status_code == 200
+    assert js.headers["cache-control"] == "no-cache"
 
 
 def test_validation_error_uses_error_shape(client):
