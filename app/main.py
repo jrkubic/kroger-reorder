@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from .importer import parse as parse_import
 from .kroger import KrogerError, NotSignedIn
+from .orders import build_order
 from .storage import Item, ListLoad, Storage
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -83,6 +84,12 @@ class ListNotFound(Exception):
         self.slug = slug
 
 
+class OrderNotFound(Exception):
+    def __init__(self, order_id: str) -> None:
+        super().__init__(order_id)
+        self.order_id = order_id
+
+
 def create_app(storage: Storage, kroger) -> FastAPI:
     """`kroger` is a KrogerClient or anything with the same methods (tests pass a fake)."""
     storage.ensure_ready()
@@ -107,6 +114,10 @@ def create_app(storage: Storage, kroger) -> FastAPI:
     @app.exception_handler(ListNotFound)
     async def list_not_found(_: Request, exc: ListNotFound):
         return error(404, f"No list named '{exc.slug}'.")
+
+    @app.exception_handler(OrderNotFound)
+    async def order_not_found(_: Request, exc: OrderNotFound):
+        return error(404, f"No order with id '{exc.order_id}'.")
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, exc: RequestValidationError):
@@ -135,6 +146,24 @@ def create_app(storage: Storage, kroger) -> FastAPI:
     def clean_name(raw: str) -> str | None:
         name = raw.strip()
         return name or None
+
+    def current_store() -> dict:
+        config = storage.load_config()
+        return {"store_id": config.get("store_id"), "store_name": config.get("store_name")}
+
+    def rejected_upcs(exc: KrogerError, upcs: list[str]) -> list[str]:
+        # Whole-token match so "1111041" is not flagged when Kroger rejects "0001111041700".
+        return [u for u in upcs if re.search(rf"(?<!\d){re.escape(u)}(?!\d)", exc.message)]
+
+    def record_order(items: list[dict], **meta) -> tuple[dict | None, str | None]:
+        """Save an order after Kroger accepted the cart. The cart is already filled, so a disk
+        failure here is reported as a warning rather than an error."""
+        order = build_order(items, store=current_store(), **meta)
+        try:
+            storage.record_order(order)
+        except OSError as exc:
+            return None, f"Sent to cart, but couldn't save it to your order history ({exc})."
+        return order, None
 
     # -- page / setup -----------------------------------------------------------------
     @app.get("/")
@@ -300,11 +329,41 @@ def create_app(storage: Storage, kroger) -> FastAPI:
         except NotSignedIn:
             raise
         except KrogerError as exc:
-            # Whole-token match so "1111041" is not flagged when Kroger rejects "0001111041700".
-            bad = [i.upc for i in chosen
-                   if re.search(rf"(?<!\d){re.escape(i.upc)}(?!\d)", exc.message)]
-            return error(502, kroger_message(exc), bad_upcs=bad)
-        return {"added": [asdict(i) for i in chosen]}
+            return error(502, kroger_message(exc), bad_upcs=rejected_upcs(exc, [i.upc for i in chosen]))
+        sent = [asdict(i) for i in chosen]
+        order, warning = record_order(sent, list_slug=slug, list_name=loaded.name)
+        return {"added": sent, "order": order, "warning": warning}
+
+    # -- orders ------------------------------------------------------------------------
+    @app.get("/api/orders")
+    def orders():
+        return {"orders": storage.list_orders()}
+
+    @app.delete("/api/orders/{order_id}", status_code=204)
+    def delete_order(order_id: str):
+        if not storage.delete_order(order_id):
+            raise OrderNotFound(order_id)
+        return Response(status_code=204)
+
+    @app.post("/api/orders/{order_id}/reorder")
+    def reorder(order_id: str):
+        source = storage.get_order(order_id)
+        if source is None:
+            raise OrderNotFound(order_id)
+        # Tolerate a hand-edited file: skip entries without a UPC or with a non-positive quantity.
+        items = [i for i in source.get("items", [])
+                 if isinstance(i, dict) and i.get("upc") and int(i.get("quantity", 0) or 0) > 0]
+        if not items:
+            return error(400, "Nothing to send.")
+        try:
+            kroger.add_to_cart([(str(i["upc"]), int(i["quantity"])) for i in items])
+        except NotSignedIn:
+            raise
+        except KrogerError as exc:
+            return error(502, kroger_message(exc), bad_upcs=rejected_upcs(exc, [str(i["upc"]) for i in items]))
+        order, warning = record_order(items, list_slug=source.get("list_slug"),
+                                      list_name=source.get("list_name"), reorder_of=order_id)
+        return {"order": order, "warning": warning}
 
     # -- import ----------------------------------------------------------------------------
     @app.post("/api/import/parse")

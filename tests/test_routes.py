@@ -349,6 +349,104 @@ def test_push_kroger_rejection_flags_whole_token_upcs_and_keeps_edits(client, kr
     assert [i.upc for i in storage.load_list("standard").items] == ["0001", "0002", "02"]
 
 
+def test_push_records_an_order_with_store_and_total(client, kroger, storage, with_store):
+    body = [{**MILK, **FULL, "quantity": 2, "price": 3.49, "promo": 2.99}, {**EGGS, **FULL, "included": False}]
+    r = client.post("/api/lists/standard/push", json=body)
+    assert r.status_code == 200
+    order = r.json()["order"]
+    assert r.json()["warning"] is None
+    assert order["list_slug"] == "standard" and order["list_name"] == "Standard"
+    assert order["store_id"] == "01400943" and order["store_name"] == "Kroger Hyde Park"
+    assert order["item_count"] == 1 and order["estimated_total"] == 5.98
+    assert [i["upc"] for i in order["items"]] == ["0001"]
+    assert [o["id"] for o in storage.list_orders()] == [order["id"]]
+
+
+def test_rejected_push_records_nothing(client, kroger, storage):
+    kroger.cart_error = KrogerError(400, "Invalid UPC 0001")
+    client.post("/api/lists/standard/push", json=[{**MILK, **FULL}])
+    assert storage.list_orders() == []
+
+
+def test_push_still_succeeds_when_history_cannot_be_written(client, storage, monkeypatch):
+    def boom(order):
+        raise OSError("disk full")
+    monkeypatch.setattr(storage, "record_order", boom)
+    r = client.post("/api/lists/standard/push", json=[{**MILK, **FULL}])
+    assert r.status_code == 200
+    assert r.json()["order"] is None
+    assert "order history" in r.json()["warning"]
+
+
+# -- orders ------------------------------------------------------------------------------
+
+def push_one(client, **over):
+    r = client.post("/api/lists/standard/push", json=[{**MILK, **FULL, "price": 3.49, **over}])
+    assert r.status_code == 200
+    return r.json()["order"]
+
+
+def test_list_orders_newest_first_with_full_items(client, kroger):
+    first = push_one(client)
+    second = push_one(client, quantity=3)
+    r = client.get("/api/orders")
+    assert r.status_code == 200
+    orders = r.json()["orders"]
+    assert [o["id"] for o in orders] == [second["id"], first["id"]]
+    assert orders[0]["items"][0]["quantity"] == 3
+
+
+def test_delete_order(client):
+    order = push_one(client)
+    assert client.delete(f"/api/orders/{order['id']}").status_code == 204
+    assert client.get("/api/orders").json()["orders"] == []
+    r = client.delete(f"/api/orders/{order['id']}")
+    assert r.status_code == 404
+    assert "No order" in r.json()["error"]
+
+
+def test_reorder_pushes_snapshot_and_records_with_source(client, kroger, with_store):
+    source = push_one(client, quantity=2)
+    kroger.cart_calls.clear()
+    r = client.post(f"/api/orders/{source['id']}/reorder")
+    assert r.status_code == 200
+    assert kroger.cart_calls == [[("0001", 2)]]
+    new = r.json()["order"]
+    assert new["reorder_of"] == source["id"]
+    assert new["list_slug"] == "standard" and new["list_name"] == "Standard"
+    assert new["item_count"] == 1 and new["estimated_total"] == 6.98
+    assert [o["id"] for o in client.get("/api/orders").json()["orders"]] == [new["id"], source["id"]]
+
+
+def test_reorder_unknown_is_404(client):
+    r = client.post("/api/orders/nope/reorder")
+    assert r.status_code == 404
+    assert r.json() == {"error": "No order with id 'nope'."}
+
+
+def test_reorder_with_nothing_sendable_is_400(client, storage):
+    storage.record_order({"id": "empty", "placed_at": "2026-10-26T00:00:00+00:00", "items": [{"upc": "0001", "quantity": 0}]})
+    r = client.post("/api/orders/empty/reorder")
+    assert r.status_code == 400
+    assert r.json()["error"] == "Nothing to send."
+
+
+def test_reorder_kroger_rejection_flags_upcs_and_records_nothing(client, kroger, storage):
+    source = push_one(client)
+    kroger.cart_error = KrogerError(400, "Invalid UPC 0001")
+    r = client.post(f"/api/orders/{source['id']}/reorder")
+    assert r.status_code == 502
+    assert r.json() == {"error": "Kroger said: Invalid UPC 0001", "bad_upcs": ["0001"]}
+    assert [o["id"] for o in storage.list_orders()] == [source["id"]]
+
+
+def test_reorder_when_not_signed_in_is_401(client, kroger):
+    source = push_one(client)
+    kroger.cart_error = NotSignedIn()
+    r = client.post(f"/api/orders/{source['id']}/reorder")
+    assert r.status_code == 401
+
+
 # -- prices ------------------------------------------------------------------------------
 
 def test_refresh_prices_requires_store(client):
