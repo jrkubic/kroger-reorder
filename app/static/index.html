@@ -41,6 +41,7 @@
   .price { color:var(--muted); font-size:.9rem; white-space:nowrap; }
   .sale { color:var(--ok); font-weight:600; font-size:.9rem; white-space:nowrap; }
   .sale s { color:var(--muted); font-weight:400; margin-left:4px; }
+  button.icon { padding:8px 12px; font-size:1.05rem; line-height:1; }
   .menu-wrap { position:relative; }
   .menu { position:absolute; right:0; top:42px; background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,.08); display:flex; flex-direction:column; min-width:170px; z-index:5; overflow:hidden; }
   .menu button { background:transparent; color:var(--ink); text-align:left; border-radius:0; padding:10px 14px; }
@@ -111,14 +112,12 @@
     <div class="row between">
       <div class="row">
         <select id="list-select" title="Choose a list"></select>
+        <button class="secondary icon" data-action="new" title="New list" aria-label="New list">+</button>
+        <button class="secondary icon" data-action="rename" title="Rename this list" aria-label="Rename this list">&#x270E;</button>
         <div class="menu-wrap">
-          <button id="menu-btn" class="secondary" title="List actions">&#x22EF;</button>
+          <button id="menu-btn" class="secondary" title="More list actions">&#x22EF;</button>
           <div id="menu" class="menu hidden">
-            <button data-action="new">New list</button>
-            <button data-action="rename">Rename</button>
             <button data-action="duplicate">Duplicate</button>
-            <button data-action="import">Import items</button>
-            <button data-action="export">Export CSV</button>
             <button data-action="delete" class="danger">Delete list</button>
           </div>
         </div>
@@ -130,7 +129,11 @@
     </div>
     <div class="row between" style="margin-top:10px">
       <span id="price-status" class="muted"></span>
-      <button id="check-prices" class="secondary">Check prices</button>
+      <div class="row">
+        <button class="secondary" data-action="import">Import</button>
+        <button class="secondary" data-action="export">Export CSV</button>
+        <button id="check-prices" class="secondary">Check prices</button>
+      </div>
     </div>
     <ul id="items"></ul>
     <p id="empty" class="muted hidden">Nothing in this list yet. Search above to add items, or import a list from the menu.</p>

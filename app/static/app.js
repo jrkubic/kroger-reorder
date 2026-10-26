@@ -272,7 +272,8 @@ $('list-select').onchange = (e) => switchList(e.target.value).catch(err => { ban
 $('menu-btn').onclick = (e) => { e.stopPropagation(); $('menu').classList.toggle('hidden'); };
 document.addEventListener('click', () => $('menu').classList.add('hidden'));
 
-$('menu').addEventListener('click', async (e) => {
+// One handler for every list action: the +, pencil, Import, and Export buttons, and the ⋯ menu.
+$('list-section').addEventListener('click', async (e) => {
   const action = e.target.dataset.action;
   if (!action) return;
   $('menu').classList.add('hidden');

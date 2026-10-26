@@ -58,7 +58,7 @@ Two things to check once:
 
 1. Empty your Kroger cart in the app (the API can only *add*; it can't see or clear what's already there).
 2. Run `.venv\Scripts\python -m app`.
-3. Pick a list from the dropdown. The ⋯ menu creates, renames, duplicates, deletes, or imports.
+3. Pick a list from the dropdown. **+** makes a new list, the pencil renames the current one, and the ⋯ menu duplicates or deletes it. **Import** and **Export CSV** sit next to **Check prices**.
 4. Uncheck anything you don't need this trip, tweak quantities, click **Send to cart**.
 5. Open the Kroger app, choose a pickup time, pay.
 
@@ -76,7 +76,7 @@ History starts with the first push after this feature was added; Kroger's public
 
 ## Importing a list
 
-From the ⋯ menu choose **Import items**, then pick a file or paste text. Accepted shapes:
+Click **Import** (next to **Check prices**), then pick a file or paste text. Accepted shapes:
 
 - Plain text or Markdown: one item per line. `- [ ] 2x milk`, `eggs x3`, and `bread (4)` all work.
 - CSV: a `name` column and optional `quantity` column, or just two columns.
@@ -88,7 +88,7 @@ Each line is matched against your store's catalog. Pick a different match or ski
 
 ## Exporting a list
 
-From the ⋯ menu choose **Export CSV** to download the current list as `<list>.csv` with these columns:
+Click **Export CSV** (next to **Check prices**) to download the current list as `<list>.csv` with these columns:
 
 ```
 upc,name,size,quantity,included,price,promo,image
