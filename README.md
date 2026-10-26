@@ -348,4 +348,4 @@ These come from Kroger's public API, not from the app:
 
 ## License
 
-No license has been chosen yet, so all rights are reserved by the author. If you intend to share or accept contributions, add a `LICENSE` file; MIT is the usual choice for a personal tool like this.
+Released under the [MIT License](LICENSE). Kroger is a trademark of The Kroger Co.; this project is an independent tool built on Kroger's public API and is not affiliated with or endorsed by Kroger.
