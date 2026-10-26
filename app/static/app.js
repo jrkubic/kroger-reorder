@@ -274,7 +274,7 @@ document.addEventListener('click', () => $('menu').classList.add('hidden'));
 
 // One handler for every list action: the +, pencil, Import, and Export buttons, and the ⋯ menu.
 $('list-section').addEventListener('click', async (e) => {
-  const action = e.target.dataset.action;
+  const action = e.target.closest('[data-action]')?.dataset.action;  // closest: the icon SVG may be the target
   if (!action) return;
   $('menu').classList.add('hidden');
   banner();
