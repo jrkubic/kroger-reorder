@@ -36,6 +36,24 @@ Your browser opens to http://localhost:8000. Enter your zip, pick your store, an
 
 The console also prints a wifi address like `http://192.168.1.20:8000`. Open that on your phone or any device on the same network. Sign in to Kroger from this computer; every device shares the sign-in.
 
+## Start it with Windows (for phone access any time)
+
+To have the server running whenever this PC is signed in, so your phone can open the list without you touching the computer:
+
+```powershell
+cd C:\Projects\kroger-reorder
+.\scripts\install-startup.ps1
+```
+
+This adds a "Kroger Reorder" entry to your Startup folder that runs the server hidden (no window) with the browser pop-up turned off. It starts at your next sign-in; double-click the shortcut in the Startup folder to start it right away. Output goes to `%LOCALAPPDATA%\kroger-reorder\server.log`. Remove it with `.\scripts\install-startup.ps1 -Remove`, or toggle it under Settings > Apps > Startup.
+
+Two things to check once:
+
+- The first time the hidden server starts, Windows Firewall may ask whether to allow `pythonw.exe` on private networks. Click **Allow**, or your phone won't reach it.
+- The wifi address printed at startup (e.g. `http://192.168.1.2:8000`) is handed out by your router and can change. Reserve the PC's address in the router's DHCP settings so the bookmark on your phone keeps working.
+
+`python -m app --no-browser` is the same thing run by hand without opening a browser tab.
+
 ## Everyday use
 
 1. Empty your Kroger cart in the app (the API can only *add*; it can't see or clear what's already there).
