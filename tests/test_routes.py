@@ -526,9 +526,63 @@ def test_refresh_prices_stops_after_three_transport_failures(client, kroger, wit
 def test_import_parse_returns_lines(client):
     r = client.post("/api/import/parse", json={"text": "- 2x milk\n- eggs"})
     assert r.json() == {"lines": [
-        {"raw": "- 2x milk", "name": "milk", "quantity": 2},
-        {"raw": "- eggs", "name": "eggs", "quantity": 1},
+        {"raw": "- 2x milk", "name": "milk", "quantity": 2, "exact": None},
+        {"raw": "- eggs", "name": "eggs", "quantity": 1, "exact": None},
     ]}
+
+
+def test_import_parse_exported_csv_returns_exact_rows(client):
+    text = "upc,name,size,quantity,included,price,promo,image\n0001,Whole Milk,1 gal,2,false,3.49,,\n"
+    (line,) = client.post("/api/import/parse", json={"text": text}).json()["lines"]
+    assert line["name"] == "Whole Milk" and line["quantity"] == 2
+    assert line["exact"] == {"upc": "0001", "size": "1 gal", "included": False, "price": 3.49, "promo": None, "image": None}
+
+
+def test_import_commit_honours_included_and_prices_for_new_items(client):
+    body = [{"upc": "0002", "name": "Eggs", "size": "12 ct", "image": None, "quantity": 1,
+             "included": False, "price": 4.0, "promo": 3.5}]
+    items = client.post("/api/lists/standard/import", json=body).json()["items"]
+    assert [(i["upc"], i["included"], i["price"], i["promo"], i["price_checked_at"]) for i in items] == \
+        [("0002", False, 4.0, 3.5, None)]
+
+
+# -- export ------------------------------------------------------------------------------
+
+def test_export_csv_round_trips_through_import(client, storage):
+    storage.save_list("standard", "Standard", [
+        Item(upc="0001", name="Whole Milk, Vitamin D", size="1 gal", quantity=2, included=True,
+             image="https://img/1.jpg", price=3.49, promo=2.99, price_checked_at="2026-10-26T00:00:00+00:00"),
+        Item(upc="0002", name="Eggs", size="", quantity=1, included=False),
+    ])
+    r = client.get("/api/lists/standard/export.csv")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert r.headers["content-disposition"] == 'attachment; filename="standard.csv"'
+    text = r.content.decode("utf-8-sig")
+    assert text.splitlines() == [
+        "upc,name,size,quantity,included,price,promo,image",
+        '0001,"Whole Milk, Vitamin D",1 gal,2,true,3.49,2.99,https://img/1.jpg',
+        "0002,Eggs,,1,false,,,",
+    ]
+    # The exported file re-imports into a fresh list exactly, no search needed.
+    client.post("/api/lists", json={"name": "Copy"})
+    lines = client.post("/api/import/parse", json={"text": r.content.decode("utf-8")}).json()["lines"]
+    picks = [{**l["exact"], "name": l["name"], "quantity": l["quantity"]} for l in lines]
+    items = client.post("/api/lists/copy/import", json=picks).json()["items"]
+    assert [(i["upc"], i["name"], i["size"], i["quantity"], i["included"], i["price"], i["promo"], i["image"])
+            for i in items] == [
+        ("0001", "Whole Milk, Vitamin D", "1 gal", 2, True, 3.49, 2.99, "https://img/1.jpg"),
+        ("0002", "Eggs", "", 1, False, None, None, None),
+    ]
+
+
+def test_export_missing_list_is_404(client):
+    assert client.get("/api/lists/nope/export.csv").status_code == 404
+
+
+def test_export_empty_list_is_header_only(client):
+    text = client.get("/api/lists/standard/export.csv").content.decode("utf-8-sig")
+    assert text.splitlines() == ["upc,name,size,quantity,included,price,promo,image"]
 
 
 def test_import_parse_empty_is_400(client):

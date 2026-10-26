@@ -82,8 +82,19 @@ From the ⋯ menu choose **Import items**, then pick a file or paste text. Accep
 - CSV: a `name` column and optional `quantity` column, or just two columns.
 - TSV: two columns pasted straight from a spreadsheet.
 - JSON: an array of strings or of `{"name": ..., "quantity": ...}` objects.
+- A CSV exported from this app (see below), or one of the app's own list files from `data/lists/`.
 
-Each line is matched against your store's catalog. Pick a different match or skip a line in the review table, then **Add to list**. Items already in the list get their quantity bumped.
+Each line is matched against your store's catalog. Pick a different match or skip a line in the review table, then **Add to list**. Items already in the list get their quantity bumped. Rows that carry a `upc` column are added exactly as they are, with no search; the review table shows them as "From file".
+
+## Exporting a list
+
+From the ⋯ menu choose **Export CSV** to download the current list as `<list>.csv` with these columns:
+
+```
+upc,name,size,quantity,included,price,promo,image
+```
+
+Open it in a spreadsheet, keep it as a backup, or share it. Importing that file into any list (on this or another install) recreates the items exactly, including unchecked ones. Prices in the file are the last ones seen; they refresh in the background after import.
 
 ## Where your data lives
 

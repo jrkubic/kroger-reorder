@@ -118,6 +118,7 @@
             <button data-action="rename">Rename</button>
             <button data-action="duplicate">Duplicate</button>
             <button data-action="import">Import items</button>
+            <button data-action="export">Export CSV</button>
             <button data-action="delete" class="danger">Delete list</button>
           </div>
         </div>
@@ -156,7 +157,7 @@
 
 <dialog id="import-dialog">
   <h2>Import items</h2>
-  <p class="muted">CSV, TSV (pasted from a spreadsheet), JSON, Markdown, or plain text, one item per line. Quantities like <code>2x milk</code> or <code>milk x2</code> are understood.</p>
+  <p class="muted">CSV, TSV (pasted from a spreadsheet), JSON, Markdown, or plain text, one item per line. Quantities like <code>2x milk</code> or <code>milk x2</code> are understood. A CSV exported from this app (it has a <code>upc</code> column) is added exactly as it was, with no search.</p>
   <div class="row">
     <input id="import-file" type="file" accept=".csv,.tsv,.json,.md,.txt,text/*,application/json">
   </div>

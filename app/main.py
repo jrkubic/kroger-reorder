@@ -2,6 +2,8 @@
 """FastAPI app: serves the page and a JSON API over Storage + KrogerClient."""
 from __future__ import annotations
 
+import csv
+import io
 import re
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -20,6 +22,7 @@ from .orders import build_order
 from .storage import Item, ListLoad, Storage
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+EXPORT_COLUMNS = ("upc", "name", "size", "quantity", "included", "price", "promo", "image")
 RESOLVE_CANDIDATES = 3
 TRANSPORT_FAILURE_LIMIT = 3  # consecutive status-0 errors before a price refresh gives up
 
@@ -76,6 +79,10 @@ class ImportItem(BaseModel):
     size: str | None = None  # Kroger sometimes sends null; stored as ""
     image: str | None = None
     quantity: int = 1
+    # Present when the row came from an exported CSV; a search match leaves them at the defaults.
+    included: bool = True
+    price: float | None = None
+    promo: float | None = None
 
 
 class ListNotFound(Exception):
@@ -254,6 +261,19 @@ def create_app(storage: Storage, kroger) -> FastAPI:
         return list_payload(get_list(slug))
 
     # -- items ----------------------------------------------------------------------------
+    @app.get("/api/lists/{slug}/export.csv")
+    def export_csv(slug: str):
+        loaded = get_list(slug)
+        buf = io.StringIO()
+        writer = csv.writer(buf, lineterminator="\n")
+        writer.writerow(EXPORT_COLUMNS)
+        for i in loaded.items:
+            writer.writerow([i.upc, i.name, i.size, i.quantity, "true" if i.included else "false",
+                             "" if i.price is None else i.price, "" if i.promo is None else i.promo, i.image or ""])
+        # BOM so Excel opens it as UTF-8; the importer strips it on the way back in.
+        return Response("﻿" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{slug}.csv"'})
+
     @app.post("/api/lists/{slug}/items")
     def add_item(slug: str, new: NewItem):
         loaded = get_list(slug)
@@ -399,7 +419,8 @@ def create_app(storage: Storage, kroger) -> FastAPI:
                 by_upc[pick.upc].quantity += max(1, pick.quantity)
             else:
                 item = Item(upc=pick.upc, name=pick.name, size=pick.size or "", image=pick.image,
-                            quantity=max(1, pick.quantity))
+                            quantity=max(1, pick.quantity), included=pick.included,
+                            price=pick.price, promo=pick.promo)
                 loaded.items.append(item)
                 by_upc[pick.upc] = item
         if picks:

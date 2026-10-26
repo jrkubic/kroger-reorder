@@ -17,6 +17,11 @@ TRAILING_QTY = re.compile(r"^(.+?)\s+[xX×]\s*(\d+)$")
 PAREN_QTY = re.compile(r"^(.+?)\s*\((\d+)\)$")
 NAME_KEYS = ("name", "item", "product", "description", "title")
 QTY_KEYS = ("quantity", "qty", "count", "amount")
+# Columns an exported CSV (or a list JSON file) carries. A row with a UPC is an exact product and
+# skips both quantity-in-name parsing and the Kroger search.
+UPC_KEY = "upc"
+EXACT_KEYS = ("size", "included", "price", "promo", "image")
+FALSE_WORDS = {"false", "0", "no", "n", "off", ""}
 MAX_QUANTITY = 99
 
 
@@ -25,6 +30,7 @@ class ParsedLine:
     raw: str
     name: str
     quantity: int = 1
+    exact: dict | None = None  # {upc, size, included, price, promo, image} when the source had a UPC
 
 
 def parse(text: str) -> list[ParsedLine]:
@@ -63,7 +69,38 @@ def _to_qty(value: Any) -> int:
         return 1
 
 
-def _line(raw: str, name: str, quantity: int | None = None) -> ParsedLine | None:
+def _to_float(value: Any) -> float | None:
+    try:
+        return float(str(value).strip()) if value is not None and str(value).strip() != "" else None
+    except ValueError:
+        return None
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in FALSE_WORDS if value is not None else True
+
+
+def _exact(fields: dict[str, Any]) -> dict | None:
+    """Normalise the product columns of a row that carries a UPC; None when it doesn't."""
+    upc = str(fields.get(UPC_KEY) or "").strip()
+    if not upc:
+        return None
+    return {
+        "upc": upc,
+        "size": str(fields.get("size") or "").strip(),
+        "included": _to_bool(fields.get("included", True)),
+        "price": _to_float(fields.get("price")),
+        "promo": _to_float(fields.get("promo")),
+        "image": (str(fields["image"]).strip() or None) if fields.get("image") else None,
+    }
+
+
+def _line(raw: str, name: str, quantity: int | None = None, exact: dict | None = None) -> ParsedLine | None:
+    if exact:
+        name = name.strip()  # an exact product keeps its catalog name; "(12)" there is not a quantity
+        return ParsedLine(raw=raw, name=name, quantity=quantity or 1, exact=exact) if name else None
     name, found = _split_quantity(name)
     if not name:
         return None
@@ -99,16 +136,24 @@ def _parse_csv(text: str, delimiter: str = ",") -> list[ParsedLine]:
     header = [c.strip().lower() for c in rows[0]]
     name_idx = next((i for i, c in enumerate(header) if c in NAME_KEYS), None)
     qty_idx = next((i for i, c in enumerate(header) if c in QTY_KEYS), None)
+    extra_idx: dict[str, int] = {}
     if name_idx is not None:
         rows = rows[1:]
+        extra_idx = {key: header.index(key) for key in (UPC_KEY, *EXACT_KEYS) if key in header}
     else:
         name_idx, qty_idx = 0, 1
+
+    def cell(row: list[str], idx: int | None) -> str | None:
+        return row[idx] if idx is not None and idx < len(row) and row[idx].strip() else None
+
     out = []
     for row in rows:
         if name_idx >= len(row) or not row[name_idx].strip():
             continue
-        qty = _to_qty(row[qty_idx]) if qty_idx is not None and qty_idx < len(row) and row[qty_idx].strip() else None
-        line = _line(delimiter.join(row), row[name_idx], qty)
+        raw_qty = cell(row, qty_idx)
+        qty = _to_qty(raw_qty) if raw_qty is not None else None
+        exact = _exact({key: cell(row, idx) for key, idx in extra_idx.items()}) if extra_idx else None
+        line = _line(delimiter.join(row), row[name_idx], qty, exact)
         if line:
             out.append(line)
     return out
@@ -132,7 +177,7 @@ def _parse_json(text: str) -> list[ParsedLine] | None:
                 (str(entry[k]) for k in NAME_KEYS if entry.get(k) and isinstance(entry[k], (str, int, float))), ""
             )
             qty_raw = next((entry[k] for k in QTY_KEYS if entry.get(k) is not None), None)
-            line = _line(json.dumps(entry), name, _to_qty(qty_raw) if qty_raw is not None else None)
+            line = _line(json.dumps(entry), name, _to_qty(qty_raw) if qty_raw is not None else None, _exact(entry))
         else:
             line = None
         if line:

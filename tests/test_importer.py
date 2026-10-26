@@ -89,3 +89,36 @@ def test_quantity_is_capped():
 
 def test_json_non_scalar_name_is_skipped():
     assert names(parse('[{"name": {"a": 1}}, {"name": "milk"}]')) == [("milk", 1)]
+
+
+# -- exact rows (exported CSV / list JSON carrying a UPC) ---------------------------
+
+EXPORT = ("upc,name,size,quantity,included,price,promo,image\n"
+          "0001111041700,\"Kroger Whole Milk, Vitamin D\",1 gal,2,true,3.49,2.99,https://img/milk.jpg\n"
+          "0001,Eggs (12),12 ct,1,false,,,\n"
+          ",Bread x2,,1,true,,,\n")
+
+
+def test_csv_with_upc_column_yields_exact_rows_without_quantity_parsing():
+    lines = parse(EXPORT)
+    assert [(l.name, l.quantity) for l in lines] == [("Kroger Whole Milk, Vitamin D", 2), ("Eggs (12)", 1), ("Bread", 1)]
+    assert lines[0].exact == {"upc": "0001111041700", "size": "1 gal", "included": True, "price": 3.49,
+                              "promo": 2.99, "image": "https://img/milk.jpg"}
+    assert lines[1].exact == {"upc": "0001", "size": "12 ct", "included": False, "price": None, "promo": None,
+                              "image": None}
+    assert lines[2].exact is None  # no UPC: falls back to the name search flow
+
+
+def test_csv_without_upc_column_has_no_exact():
+    assert all(l.exact is None for l in parse("name,quantity\nmilk,2\n"))
+
+
+def test_json_list_file_with_upcs_yields_exact_rows():
+    text = '{"name": "Standard", "items": [{"upc": "0001", "name": "Milk", "size": "1 gal", "quantity": 3, "included": true, "price": 3.49}]}'
+    (line,) = parse(text)
+    assert (line.name, line.quantity) == ("Milk", 3)
+    assert line.exact == {"upc": "0001", "size": "1 gal", "included": True, "price": 3.49, "promo": None, "image": None}
+
+
+def test_exact_row_without_name_is_skipped():
+    assert parse("upc,name,quantity\n0001,,2\n") == []

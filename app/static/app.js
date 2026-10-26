@@ -302,6 +302,11 @@ $('menu').addEventListener('click', async (e) => {
       await switchList(data.active_list);
     } else if (action === 'import') {
       openImport();
+    } else if (action === 'export') {
+      const a = document.createElement('a');
+      a.href = listPath('/export.csv');
+      a.download = `${state.active_list}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
     }
   } catch (err) { banner('error', err.message); }
 });
@@ -333,9 +338,17 @@ $('import-parse').onclick = async () => {
   const text = $('import-text').value;
   try {
     const { lines } = await api('POST', '/api/import/parse', { text });
-    banner('warn', `Looking up ${lines.length} item${lines.length === 1 ? '' : 's'} at your store…`, false, $('import-banner'));
-    const { matches } = await api('POST', '/api/import/resolve', { names: lines.map(l => l.name) });
-    importRows = lines.map((l, i) => ({ ...l, candidates: matches[i].candidates }));
+    // Rows with a UPC (an exported CSV) are exact products; only the rest need a catalog search.
+    const toResolve = lines.filter(l => !l.exact);
+    let matches = [];
+    if (toResolve.length) {
+      banner('warn', `Looking up ${plural(toResolve.length, 'item')} at your store…`, false, $('import-banner'));
+      ({ matches } = await api('POST', '/api/import/resolve', { names: toResolve.map(l => l.name) }));
+    }
+    let next = 0;
+    importRows = lines.map(l => l.exact
+      ? { ...l, candidates: [{ ...l.exact, name: l.name, fromFile: true }] }
+      : { ...l, candidates: matches[next++].candidates });
     banner(null, '', false, $('import-banner'));
     renderImport();
   } catch (e) {
@@ -351,7 +364,7 @@ function renderImport() {
   importRows.forEach((row, idx) => {
     const tr = document.createElement('tr');
     const options = row.candidates.map((c, ci) =>
-      `<option value="${ci}" ${ci === 0 ? 'selected' : ''}>${esc(c.name)} · ${esc(c.size)}${c.price != null ? ' · ' + money(c.promo ?? c.price) : ''}</option>`
+      `<option value="${ci}" ${ci === 0 ? 'selected' : ''}>${c.fromFile ? 'From file: ' : ''}${esc(c.name)}${c.size ? ' · ' + esc(c.size) : ''}${c.price != null || c.promo != null ? ' · ' + money(c.promo ?? c.price) : ''}</option>`
     ).join('');
     tr.innerHTML = `
       <td><div>${esc(row.name)}</div><div class="raw">${esc(row.raw)}</div></td>
@@ -369,7 +382,9 @@ function importPicks() {
     const qty = Math.max(1, parseInt($('import-table').querySelector(`[data-import-qty="${idx}"]`).value || '1', 10) || 1);
     if (pick < 0) return null;
     const c = row.candidates[pick];
-    return { upc: c.upc, name: c.name, size: c.size, image: c.image, quantity: qty };
+    const item = { upc: c.upc, name: c.name, size: c.size, image: c.image, quantity: qty };
+    if (c.fromFile) Object.assign(item, { included: c.included, price: c.price, promo: c.promo });
+    return item;
   }).filter(Boolean);
 }
 
