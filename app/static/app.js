@@ -167,7 +167,8 @@ async function refreshPrices(manual) {
 async function load() {
   const params = new URLSearchParams(location.search);
   const authError = params.get('auth_error');
-  if (authError) history.replaceState(null, '', location.pathname);
+  if (authError) history.replaceState(null, '', location.pathname + location.hash);
+  showTab(tabFromHash());
   try {
     await refreshLists();
     await loadList();
@@ -442,14 +443,26 @@ async function loadOrders() {
   renderOrders();
 }
 
-$('orders-btn').onclick = async () => {
-  banner(null, '', false, $('orders-banner'));
-  $('orders-dialog').showModal();
-  try { await loadOrders(); }
-  catch (e) { banner('error', e.message, false, $('orders-banner')); }
-};
+// -- tabs ---------------------------------------------------------------------------------------
 
-$('orders-close').onclick = () => $('orders-dialog').close();
+function showTab(name) {
+  const onOrders = name === 'orders';
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  $('tab-list').classList.toggle('hidden', onOrders);
+  $('tab-orders').classList.toggle('hidden', !onOrders);
+  $('footer').classList.toggle('hidden', onOrders);
+  const hash = onOrders ? '#orders' : '';
+  if (location.hash !== hash) history.replaceState(null, '', location.pathname + location.search + hash);
+  if (onOrders) {
+    banner(null, '', false, $('orders-banner'));
+    loadOrders().catch(e => banner('error', e.message, false, $('orders-banner')));
+  }
+}
+
+function tabFromHash() { return location.hash === '#orders' ? 'orders' : 'list'; }
+
+document.querySelectorAll('.tab').forEach(t => { t.onclick = () => showTab(t.dataset.tab); });
+window.addEventListener('hashchange', () => showTab(tabFromHash()));
 
 $('orders').addEventListener('click', async (e) => {
   const obanner = $('orders-banner');

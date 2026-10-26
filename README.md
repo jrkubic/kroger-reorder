@@ -52,7 +52,7 @@ Items show a green sale price with the regular price struck through when your st
 
 ## Order history
 
-Every successful **Send to cart** is saved as an order in `data/orders.json` with the date, the list it came from, the items and quantities, and an estimated total from the shelf prices at the time. Click **Orders** next to **Check prices** to see them, newest first. Tap an order to see its items, send that exact order to your cart again, or delete it.
+Every successful **Send to cart** is saved as an order in `data/orders.json` with the date, the list it came from, the items and quantities, and an estimated total from the shelf prices at the time. The **Orders** tab at the top of the page shows them, newest first; `http://localhost:8000/#orders` opens straight to it. Tap an order to see its items, send that exact order to your cart again, or delete it.
 
 History starts with the first push after this feature was added; Kroger's public API has no way to read past orders. The estimate is from Kroger's catalog prices, not your receipt.
 
