@@ -5,6 +5,8 @@ const STALE_MS = 24 * 60 * 60 * 1000;
 
 let state = { store: null, signed_in: false, lists: [], active_list: null, name: '', items: [], warning: null };
 let importRows = [];  // [{raw, name, quantity, candidates}]
+let orders = [];        // from GET /api/orders, newest first
+let openOrderId = null; // which order row is expanded
 
 // -- helpers ----------------------------------------------------------------------------
 
@@ -394,16 +396,111 @@ $('import-commit').onclick = async () => {
   }
 };
 
+// -- orders dialog ---------------------------------------------------------------------------
+
+function whenText(iso) {
+  return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function previewText(items) {
+  const names = items.slice(0, 3).map(i => esc(i.name));
+  const more = items.length - names.length;
+  return names.join(', ') + (more > 0 ? ` +${more} more` : '');
+}
+
+function plural(n, word) { return `${n} ${word}${n === 1 ? '' : 's'}`; }
+
+function renderOrders() {
+  const ul = $('orders'); ul.innerHTML = '';
+  orders.forEach(o => {
+    const li = document.createElement('li');
+    li.dataset.id = o.id;
+    const total = o.estimated_total != null ? ` · est. ${money(o.estimated_total)}` : '';
+    const tag = o.reorder_of ? '<span class="tag">reorder</span>' : '';
+    const details = o.id !== openOrderId ? '' : `
+      <div class="details">
+        <ul>${o.items.map(i => `<li>${thumb(i.image)}
+          <div class="name"><div>${esc(i.name)}</div><div class="size">${esc(i.size)} ${priceHtml(i)}</div></div>
+          <span class="qty">&times;${i.quantity}</span></li>`).join('')}</ul>
+        <div class="row" style="margin-top:10px">
+          <button data-reorder="${esc(o.id)}">Send to cart again</button>
+          <button class="danger" data-delete-order="${esc(o.id)}">Delete</button>
+        </div>
+      </div>`;
+    li.innerHTML = `
+      <div class="head"><div class="name">
+        <div>${esc(whenText(o.placed_at))} · ${esc(o.list_name || 'List')}${tag}</div>
+        <div class="size">${plural(o.item_count, 'item')}${total} · ${previewText(o.items)}</div>
+      </div></div>${details}`;
+    ul.appendChild(li);
+  });
+  $('orders-empty').classList.toggle('hidden', orders.length > 0);
+}
+
+async function loadOrders() {
+  orders = (await api('GET', '/api/orders')).orders;
+  renderOrders();
+}
+
+$('orders-btn').onclick = async () => {
+  banner(null, '', false, $('orders-banner'));
+  $('orders-dialog').showModal();
+  try { await loadOrders(); }
+  catch (e) { banner('error', e.message, false, $('orders-banner')); }
+};
+
+$('orders-close').onclick = () => $('orders-dialog').close();
+
+$('orders').addEventListener('click', async (e) => {
+  const obanner = $('orders-banner');
+  const reorderId = e.target.dataset.reorder;
+  const deleteId = e.target.dataset.deleteOrder;
+  if (reorderId) {
+    e.target.disabled = true;
+    banner(null, '', false, obanner);
+    const source = orders.find(o => o.id === reorderId);
+    try {
+      const { order, warning } = await api('POST', `/api/orders/${encodeURIComponent(reorderId)}/reorder`);
+      await loadOrders();
+      const done = `Sent ${plural(order ? order.item_count : source.item_count, 'item')} to your Kroger cart. ` +
+        `Finish checkout at <a href="https://www.kroger.com/cart" target="_blank" rel="noopener">kroger.com/cart</a> or in the Kroger app.`;
+      banner(warning ? 'warn' : 'ok', warning ? `${esc(warning)} ${done}` : done, true, obanner);
+    } catch (err) {
+      const bad = (err.data && err.data.bad_upcs) || [];
+      const names = bad.map(u => source?.items.find(i => i.upc === u)?.name || u);
+      banner('error', err.message + (names.length ? ` Rejected: ${names.join(', ')}.` : ''), false, obanner);
+      e.target.disabled = false;
+    }
+    return;
+  }
+  if (deleteId) {
+    if (!confirm('Delete this order from your history?')) return;
+    try {
+      await api('DELETE', `/api/orders/${encodeURIComponent(deleteId)}`);
+      orders = orders.filter(o => o.id !== deleteId);
+      if (openOrderId === deleteId) openOrderId = null;
+      renderOrders();
+    } catch (err) { banner('error', err.message, false, obanner); }
+    return;
+  }
+  if (e.target.closest('.details')) return;  // clicks inside the item list don't collapse it
+  const li = e.target.closest('li[data-id]');
+  if (!li) return;
+  openOrderId = openOrderId === li.dataset.id ? null : li.dataset.id;
+  renderOrders();
+});
+
 // -- push -------------------------------------------------------------------------------------
 
 $('push').onclick = async () => {
   banner();
   $('push').disabled = true;
   try {
-    const { added } = await api('POST', listPath('/push'), cleanItems());
+    const { added, warning } = await api('POST', listPath('/push'), cleanItems());
     state.items.forEach(i => delete i.bad);
-    banner('ok', `Added to your Kroger cart: ${added.map(i => esc(i.name)).join(', ')}. ` +
-      `Finish checkout at <a href="https://www.kroger.com/cart" target="_blank" rel="noopener">kroger.com/cart</a> or in the Kroger app.`, true);
+    const done = `Added to your Kroger cart: ${added.map(i => esc(i.name)).join(', ')}. ` +
+      `Finish checkout at <a href="https://www.kroger.com/cart" target="_blank" rel="noopener">kroger.com/cart</a> or in the Kroger app.`;
+    banner(warning ? 'warn' : 'ok', warning ? `${done} ${esc(warning)}` : done, true);
   } catch (e) {
     const bad = (e.data && e.data.bad_upcs) || [];
     state.items.forEach(i => { i.bad = bad.includes(i.upc); });
