@@ -2,9 +2,12 @@
 """FastAPI app: serves the page and a JSON API over Storage + KrogerClient."""
 from __future__ import annotations
 
+import base64
+import binascii
 import csv
 import io
 import re
+import tempfile
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,10 +23,15 @@ from .importer import parse as parse_import
 from .kroger import KrogerError, NotSignedIn
 from .orders import build_order
 from .storage import Item, ListLoad, Storage
+from .usage import profile_text, usage_profile
+from .vision import VisionError, analyze as analyze_photos
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 EXPORT_COLUMNS = ("upc", "name", "size", "quantity", "included", "price", "promo", "image")
 RESOLVE_CANDIDATES = 3
+MAX_PHOTOS = 4
+MAX_PHOTO_BYTES = 6 * 1024 * 1024
+PHOTO_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 TRANSPORT_FAILURE_LIMIT = 3  # consecutive status-0 errors before a price refresh gives up
 
 
@@ -73,6 +81,16 @@ class ResolveRequest(BaseModel):
     names: list[str]
 
 
+class Photo(BaseModel):
+    media_type: str
+    data: str  # base64, no data: prefix
+
+
+class PhotoRequest(BaseModel):
+    photos: list[Photo]
+    note: str = ""
+
+
 class ImportItem(BaseModel):
     upc: str
     name: str
@@ -97,8 +115,10 @@ class OrderNotFound(Exception):
         self.order_id = order_id
 
 
-def create_app(storage: Storage, kroger) -> FastAPI:
-    """`kroger` is a KrogerClient or anything with the same methods (tests pass a fake)."""
+def create_app(storage: Storage, kroger, *, photo_model: str = "claude-opus-5", photo_timeout: float = 90.0,
+               analyzer=analyze_photos) -> FastAPI:
+    """`kroger` is a KrogerClient or anything with the same methods (tests pass a fake).
+    `analyzer` has the signature of vision.analyze; tests pass a fake so Claude Code is never started."""
     storage.ensure_ready()
     app = FastAPI(title="Kroger Reorder")
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -125,6 +145,10 @@ def create_app(storage: Storage, kroger) -> FastAPI:
     @app.exception_handler(OrderNotFound)
     async def order_not_found(_: Request, exc: OrderNotFound):
         return error(404, f"No order with id '{exc.order_id}'.")
+
+    @app.exception_handler(VisionError)
+    async def vision_error(_: Request, exc: VisionError):
+        return error(exc.status, exc.message)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, exc: RequestValidationError):
@@ -395,6 +419,47 @@ def create_app(storage: Storage, kroger) -> FastAPI:
         order, warning = record_order(items, list_slug=source.get("list_slug"),
                                       list_name=source.get("list_name"), reorder_of=order_id)
         return {"order": order, "warning": warning}
+
+    # -- usage profile and photo suggestions -------------------------------------------------
+    @app.get("/api/usage")
+    def usage():
+        return {"items": usage_profile(storage.list_orders())}
+
+    @app.post("/api/photo/suggest")
+    def photo_suggest(body: PhotoRequest):
+        if not body.photos:
+            return error(400, "Add at least one photo.")
+        if len(body.photos) > MAX_PHOTOS:
+            return error(413, f"At most {MAX_PHOTOS} photos at a time.")
+        decoded = []
+        for photo in body.photos:
+            ext = PHOTO_TYPES.get(photo.media_type.lower())
+            if not ext:
+                return error(415, "Photos must be JPEG, PNG, or WebP.")
+            try:
+                raw = base64.b64decode(photo.data, validate=True)
+            except (binascii.Error, ValueError):
+                return error(400, "A photo wasn't valid base64.")
+            if not raw:
+                return error(400, "A photo was empty.")
+            if len(raw) > MAX_PHOTO_BYTES:
+                return error(413, f"Each photo must be under {MAX_PHOTO_BYTES // (1024 * 1024)} MB.")
+            decoded.append((ext, raw))
+        profile = profile_text(usage_profile(storage.list_orders()))
+        # Photos live only for this request, in a private temp dir Claude Code is pointed at.
+        with tempfile.TemporaryDirectory(prefix="kroger-photos-") as tmp:
+            paths = []
+            for n, (ext, raw) in enumerate(decoded, 1):
+                path = Path(tmp) / f"photo-{n}{ext}"
+                path.write_bytes(raw)
+                paths.append(path)
+            suggestions = analyzer(paths, body.note, profile, model=photo_model, timeout=photo_timeout)
+        lines = [{"raw": f"{s.kind}: {s.reason}" if s.reason else s.kind, "name": s.name,
+                  "quantity": s.quantity, "exact": None, "kind": s.kind, "reason": s.reason}
+                 for s in suggestions]
+        if not lines:
+            return error(422, "Claude couldn't find any groceries in those photos. Try a clearer or closer shot.")
+        return {"lines": lines}
 
     # -- import ----------------------------------------------------------------------------
     @app.post("/api/import/parse")

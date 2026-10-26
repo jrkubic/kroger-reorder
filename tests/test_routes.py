@@ -1,4 +1,5 @@
 # tests/test_routes.py
+import base64
 import json
 import re
 
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.kroger import KrogerError, NotSignedIn
 from app.main import create_app
 from app.storage import Item, Storage
+from app.vision import Suggestion, VisionError
 
 
 def product(upc, name, **over):
@@ -458,6 +460,76 @@ def test_reorder_when_not_signed_in_is_401(client, kroger):
     kroger.cart_error = NotSignedIn()
     r = client.post(f"/api/orders/{source['id']}/reorder")
     assert r.status_code == 401
+
+
+# -- usage and photo suggestions -----------------------------------------------------------
+
+def test_usage_profile_from_recorded_orders(client):
+    push_one(client, quantity=2)
+    push_one(client, quantity=4)
+    (row,) = client.get("/api/usage").json()["items"]
+    assert row["upc"] == "0001" and row["name"] == "Whole Milk" and row["times"] == 2
+    assert row["avg_quantity"] == 3.0 and row["days_since_last"] == 0
+
+
+PNG = base64.b64encode(b"\x89PNG\r\n\x1a\nfake").decode()
+
+
+def photo_body(n=1, note="out of eggs", media_type="image/png", data=PNG):
+    return {"photos": [{"media_type": media_type, "data": data}] * n, "note": note}
+
+
+@pytest.fixture
+def analyzer_client(storage, kroger):
+    calls = []
+
+    def fake(paths, note, profile, *, model, timeout):
+        calls.append({"paths": [p for p in paths], "exists": [p.exists() for p in paths], "note": note,
+                      "profile": profile, "model": model, "timeout": timeout})
+        return [Suggestion("whole milk", 1, "seen", "Half left"), Suggestion("large eggs", 2, "suggested", "")]
+    app = create_app(storage, kroger, photo_model="test-model", photo_timeout=7, analyzer=fake)
+    client = TestClient(app, follow_redirects=False)
+    client.calls = calls
+    return client
+
+
+def test_photo_suggest_writes_temp_files_passes_context_and_returns_lines(analyzer_client):
+    push_one(analyzer_client)
+    r = analyzer_client.post("/api/photo/suggest", json=photo_body(n=2))
+    assert r.status_code == 200
+    assert r.json()["lines"] == [
+        {"raw": "seen: Half left", "name": "whole milk", "quantity": 1, "exact": None, "kind": "seen", "reason": "Half left"},
+        {"raw": "suggested", "name": "large eggs", "quantity": 2, "exact": None, "kind": "suggested", "reason": ""},
+    ]
+    (call,) = analyzer_client.calls
+    assert [p.suffix for p in call["paths"]] == [".png", ".png"] and call["exists"] == [True, True]
+    assert not any(p.exists() for p in call["paths"]), "photos must be deleted after the request"
+    assert call["note"] == "out of eggs" and "Whole Milk: bought 1x" in call["profile"]
+    assert call["model"] == "test-model" and call["timeout"] == 7
+
+
+def test_photo_suggest_validation(analyzer_client):
+    c = analyzer_client
+    assert c.post("/api/photo/suggest", json=photo_body(n=0)).status_code == 400
+    assert c.post("/api/photo/suggest", json=photo_body(n=5)).status_code == 413
+    assert c.post("/api/photo/suggest", json=photo_body(media_type="image/gif")).status_code == 415
+    assert c.post("/api/photo/suggest", json=photo_body(data="not base64!")).status_code == 400
+    big = base64.b64encode(b"x" * (6 * 1024 * 1024 + 1)).decode()
+    assert c.post("/api/photo/suggest", json=photo_body(data=big)).status_code == 413
+    assert c.calls == []
+
+
+def test_photo_suggest_maps_vision_errors(storage, kroger):
+    def broken(paths, note, profile, *, model, timeout):
+        raise VisionError(503, "Claude Code isn't installed on the computer running the app, so photos can't be analyzed.")
+    client = TestClient(create_app(storage, kroger, analyzer=broken))
+    r = client.post("/api/photo/suggest", json=photo_body())
+    assert r.status_code == 503 and "Claude Code isn't installed" in r.json()["error"]
+
+
+def test_photo_suggest_with_no_groceries_is_422(storage, kroger):
+    client = TestClient(create_app(storage, kroger, analyzer=lambda *a, **k: []))
+    assert client.post("/api/photo/suggest", json=photo_body()).status_code == 422
 
 
 # -- prices ------------------------------------------------------------------------------

@@ -57,7 +57,8 @@ def main(argv: list[str] | None = None) -> None:
     settings = load_settings()
     storage = Storage()
     kroger = KrogerClient(settings.client_id, settings.client_secret, settings.redirect_uri, storage)
-    app = create_app(storage, kroger)  # also migrates v1 data and ensures a default list
+    app = create_app(storage, kroger, photo_model=settings.photo_model,
+                     photo_timeout=settings.photo_timeout)  # also migrates v1 data and ensures a default list
     with socket.socket() as probe:
         try:
             probe.bind(("0.0.0.0", settings.port))
