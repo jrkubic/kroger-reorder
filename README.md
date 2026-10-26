@@ -50,6 +50,12 @@ To add an item to the current list, search for it in the **Add an item** box and
 
 Items show a green sale price with the regular price struck through when your store has a promo. Prices are checked in the background when you open a list that hasn't been checked in a day, or any time with **Check prices**. These are shelf promos from Kroger's catalog, not digital coupons; coupons still have to be clipped in the Kroger app.
 
+## Order history
+
+Every successful **Send to cart** is saved as an order in `data/orders.json` with the date, the list it came from, the items and quantities, and an estimated total from the shelf prices at the time. Click **Orders** next to **Check prices** to see them, newest first. Tap an order to see its items, send that exact order to your cart again, or delete it.
+
+History starts with the first push after this feature was added; Kroger's public API has no way to read past orders. The estimate is from Kroger's catalog prices, not your receipt.
+
 ## Importing a list
 
 From the ⋯ menu choose **Import items**, then pick a file or paste text. Accepted shapes:
