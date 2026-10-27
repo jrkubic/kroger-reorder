@@ -77,7 +77,7 @@ No JavaScript dependencies or bundler. The page is served as-is from `app/static
 ```
 kroger-reorder/
 ├── app/
-│   ├── __main__.py        Entry point: python -m app [--no-browser]
+│   ├── __main__.py        Entry point: python -m app [--no-browser] [--launcher]
 │   ├── main.py            FastAPI app factory and every HTTP route
 │   ├── kroger.py          Kroger API client: OAuth, locations, products, cart
 │   ├── storage.py         JSON persistence: lists, config, tokens, order history
@@ -92,8 +92,9 @@ kroger-reorder/
 ├── tests/                 pytest suite, one module per app module
 ├── docs/plans/            Design documents and implementation plans per version
 ├── scripts/
-│   └── install-startup.ps1  Adds or removes the Windows startup entry
-├── img/                   Screenshots used in this README
+│   ├── install-startup.ps1  Adds or removes the Windows startup entry
+│   └── install-start-menu.ps1  Adds or removes the Start Menu shortcut
+├── img/                   Screenshots for this README and the app icon
 ├── data/                  Your lists, config, tokens, orders (gitignored)
 ├── .env                   Kroger credentials (gitignored)
 ├── .env.example           Template for .env
@@ -156,6 +157,16 @@ Check two things once:
 - The wifi address comes from your router and can change. Reserve the PC's address in the router's DHCP settings so the phone bookmark keeps working.
 
 `python -m app --no-browser` is the same thing run by hand without opening a browser tab.
+
+### Start Menu shortcut
+
+For a one-click way in, add a "Kroger Reorder" app to the Start Menu:
+
+```powershell
+.\scripts\install-start-menu.ps1
+```
+
+Press the Windows key, type "Kroger", and press Enter. If the server is already running it just opens the page; if not, it starts the server hidden and then opens the page. The icon is `img/kroger-reorder.ico`. Remove it with `.\scripts\install-start-menu.ps1 -Remove`. Under the hood the shortcut runs `python -m app --launcher`.
 
 ## Using the app
 

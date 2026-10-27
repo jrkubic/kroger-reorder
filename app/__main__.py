@@ -33,6 +33,15 @@ def lan_ip() -> str | None:
         return None
 
 
+def port_in_use(port: int) -> bool:
+    with socket.socket() as probe:
+        try:
+            probe.bind(("0.0.0.0", port))
+        except OSError:
+            return True
+    return False
+
+
 def log_path() -> Path:
     base = os.environ.get("LOCALAPPDATA") or str(Path.home())
     return Path(base) / "kroger-reorder" / "server.log"
@@ -51,23 +60,25 @@ def attach_log_when_headless() -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="kroger-reorder", description="Run the Kroger Reorder server.")
     parser.add_argument("--no-browser", action="store_true", help="don't open the page in a browser at startup")
+    parser.add_argument("--launcher", action="store_true",
+                        help="Start Menu behaviour: if the server is already running just open the page, else start it")
     args = parser.parse_args(argv)
     attach_log_when_headless()
 
     settings = load_settings()
+    local = f"http://localhost:{settings.port}"
+    if args.launcher and port_in_use(settings.port):
+        webbrowser.open(local)
+        return
     storage = Storage()
     kroger = KrogerClient(settings.client_id, settings.client_secret, settings.redirect_uri, storage)
     app = create_app(storage, kroger, photo_model=settings.photo_model,
                      photo_timeout=settings.photo_timeout)  # also migrates v1 data and ensures a default list
-    with socket.socket() as probe:
-        try:
-            probe.bind(("0.0.0.0", settings.port))
-        except OSError:
-            sys.exit(
-                f"Port {settings.port} is already in use (is Kroger Reorder already running?). "
-                "Close it, or set PORT in .env and update the redirect URL on your Kroger app."
-            )
-    local = f"http://localhost:{settings.port}"
+    if port_in_use(settings.port):
+        sys.exit(
+            f"Port {settings.port} is already in use (is Kroger Reorder already running?). "
+            "Close it, or set PORT in .env and update the redirect URL on your Kroger app."
+        )
     print(f"Kroger Reorder running at {local}", flush=True)
     if ip := lan_ip():
         print(f"  On your wifi:  http://{ip}:{settings.port}", flush=True)
