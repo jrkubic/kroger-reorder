@@ -1,7 +1,7 @@
 // Kroger Reorder page logic. Vanilla JS, talks to the JSON API in kroger_reorder/main.py.
 const $ = (id) => document.getElementById(id);
 const LOCAL_HOST = ['localhost', '127.0.0.1'].includes(location.hostname);
-function isHost() { return LOCAL_HOST || (!!state.public_url && location.origin === state.public_url); }
+function isHost() { return LOCAL_HOST || (!!state.public_url && location.origin === String(state.public_url).toLowerCase()); }
 const STALE_MS = 24 * 60 * 60 * 1000;
 
 let state = { store: null, signed_in: false, lists: [], active_list: null, name: '', items: [], warning: null,
