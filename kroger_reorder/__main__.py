@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     storage = Storage(settings.data_dir)
     kroger = KrogerClient(settings.client_id, settings.client_secret, settings.redirect_uri, storage)
-    backend = choose_backend(api_key=settings.anthropic_api_key)
+    backend = choose_backend(api_key=settings.anthropic_api_key)  # startup snapshot; the page shows this, requests re-check per call
     app = create_app(
         storage, kroger,
         photo_model=settings.photo_model, photo_timeout=settings.photo_timeout,
@@ -100,9 +100,9 @@ def main(argv: list[str] | None = None) -> None:
     if ip := lan_ip():
         print(f"  On your wifi:  http://{ip}:{settings.port}", flush=True)
     print(f"  Data folder:   {settings.data_dir}", flush=True)
-    print(f"  Photos:        {PHOTO_LABELS[backend]}", flush=True)
-    print("  Sign in to Kroger from this computer (or at the public URL); other devices share the sign-in.  (Ctrl+C to stop)",
-          flush=True)
+    print(f"  Photos:        {PHOTO_LABELS.get(backend, str(backend))}", flush=True)
+    where = "this computer or the public URL" if settings.public_url != local else "this computer"
+    print(f"  Sign in to Kroger from {where}; other devices share the sign-in.  (Ctrl+C to stop)", flush=True)
     if not args.no_browser:
         threading.Timer(1.0, webbrowser.open, args=(local,)).start()
     uvicorn.run(app, host="0.0.0.0", port=settings.port, log_level="warning")

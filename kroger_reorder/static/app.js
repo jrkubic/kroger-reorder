@@ -1,9 +1,11 @@
 // Kroger Reorder page logic. Vanilla JS, talks to the JSON API in kroger_reorder/main.py.
 const $ = (id) => document.getElementById(id);
-const IS_HOST = ['localhost', '127.0.0.1'].includes(location.hostname);
+const LOCAL_HOST = ['localhost', '127.0.0.1'].includes(location.hostname);
+function isHost() { return LOCAL_HOST || (!!state.public_url && location.origin === state.public_url); }
 const STALE_MS = 24 * 60 * 60 * 1000;
 
-let state = { store: null, signed_in: false, lists: [], active_list: null, name: '', items: [], warning: null };
+let state = { store: null, signed_in: false, lists: [], active_list: null, name: '', items: [], warning: null,
+              photo_backend: null, public_url: null };
 let importRows = [];  // [{raw, name, quantity, candidates}]
 let orders = [];        // from GET /api/orders, newest first
 let openOrderId = null; // which order row is expanded
@@ -84,8 +86,8 @@ function render() {
   $('setup').classList.toggle('hidden', setupDone);
   $('store-block').classList.toggle('hidden', !!state.store);
   $('signin-block').classList.toggle('hidden', !!state.signed_in);
-  $('signin-link').classList.toggle('hidden', !IS_HOST);
-  $('signin-remote').classList.toggle('hidden', IS_HOST);
+  $('signin-link').classList.toggle('hidden', !isHost());
+  $('signin-remote').classList.toggle('hidden', isHost());
   $('add').classList.toggle('hidden', !state.store);
   $('store-label').textContent = state.store ? state.store.store_name : '';
   $('push').disabled = !setupDone || !state.items.some(i => i.included);
@@ -138,7 +140,8 @@ function adoptList(data) {
 
 async function refreshLists() {
   const s = await api('GET', '/api/state');
-  Object.assign(state, { store: s.store, signed_in: s.signed_in, lists: s.lists, active_list: s.active_list });
+  Object.assign(state, { store: s.store, signed_in: s.signed_in, lists: s.lists, active_list: s.active_list,
+                         photo_backend: s.photo_backend, public_url: s.public_url });
 }
 
 async function loadList() {
@@ -435,6 +438,10 @@ function openPhoto() {
   $('photo-thumbs').innerHTML = '';
   $('photo-go').disabled = true;
   banner(null, '', false, $('photo-banner'));
+  $('photo-backend').textContent = {
+    api: 'Photos are analyzed through the Anthropic API key in .env.',
+    cli: 'Photos are analyzed by Claude Code on the computer running the app.',
+  }[state.photo_backend] || 'Photo analysis isn\'t set up yet: add ANTHROPIC_API_KEY to .env, or install Claude Code on the computer running the app.';
   const sel = $('photo-list'); sel.innerHTML = '';
   state.lists.forEach(l => {
     const opt = document.createElement('option');
