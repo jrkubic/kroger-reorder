@@ -179,7 +179,9 @@ def analyze_api(photos: list[Path], note: str, profile: str, *, model: str, time
     except anthropic.APIStatusError as exc:
         detail = exc.message
         if isinstance(exc.body, dict):
-            detail = exc.body.get("error", {}).get("message") or detail
+            error = exc.body.get("error")
+            if isinstance(error, dict):
+                detail = error.get("message") or detail
         raise VisionError(502, f"Anthropic error: {detail}") from exc
     except anthropic.APIError as exc:
         raise VisionError(502, f"Anthropic error: {exc.message}") from exc

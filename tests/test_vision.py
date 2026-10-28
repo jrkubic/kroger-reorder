@@ -239,6 +239,15 @@ def test_analyze_api_bad_request_surfaces_inner_api_message(jpg_photos):
     assert exc.value.status == 502 and "image exceeds 5 MB maximum" in exc.value.message
 
 
+def test_analyze_api_tolerates_non_dict_error_body(jpg_photos):
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    error = anthropic.BadRequestError("Error code: 400", response=httpx2.Response(400, request=request),
+                                      body={"error": "unauthorized"})
+    with pytest.raises(VisionError) as exc:
+        analyze(jpg_photos, "", "", model="m", timeout=5, api_key="sk", make_client=fake_client(error=error))
+    assert exc.value.status == 502 and "Error code: 400" in exc.value.message
+
+
 def test_analyze_without_key_or_cli_explains_both_options():
     with pytest.raises(VisionError) as exc:
         analyze(PHOTOS, "", "", model="m", timeout=5, runner=fake_runner(), which=lambda n: None)
