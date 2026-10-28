@@ -200,6 +200,12 @@ def test_analyze_api_sends_inline_images_and_parses_text(jpg_photos):
     (api_error(anthropic.PermissionDeniedError, 403), 502, "ANTHROPIC_API_KEY"),
     (api_error(anthropic.RateLimitError, 429), 503, "rate limit"),
     (api_error(anthropic.APIStatusError, 500, "overloaded"), 502, "overloaded"),
+    (api_error(anthropic.NotFoundError, 404), 502, "PHOTO_MODEL"),
+    (api_error(anthropic.OverloadedError, 529), 503, "busy"),
+    (api_error(anthropic.ServiceUnavailableError, 503), 503, "busy"),
+    (api_error(anthropic.BadRequestError, 400, "Error code: 400"), 502, "Error code: 400"),
+    (anthropic.APIError("response validation broke", httpx2.Request("POST", "https://x"), body=None), 502,
+     "validation broke"),
     (anthropic.APITimeoutError(request=httpx2.Request("POST", "https://x")), 504, "longer than 42"),
     (anthropic.APIConnectionError(request=httpx2.Request("POST", "https://x")), 502, "reach Anthropic"),
 ])
@@ -214,6 +220,23 @@ def test_analyze_api_refusal_is_502(jpg_photos):
     with pytest.raises(VisionError) as exc:
         analyze(jpg_photos, "", "", model="m", timeout=5, api_key="sk", make_client=make)
     assert exc.value.status == 502 and "declined" in exc.value.message
+
+
+def test_analyze_api_max_tokens_is_502(jpg_photos):
+    make = fake_client(result=api_message(json.dumps(GOOD), stop_reason="max_tokens"))
+    with pytest.raises(VisionError) as exc:
+        analyze(jpg_photos, "", "", model="m", timeout=5, api_key="sk", make_client=make)
+    assert exc.value.status == 502 and "cut off" in exc.value.message
+
+
+def test_analyze_api_bad_request_surfaces_inner_api_message(jpg_photos):
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    error = anthropic.BadRequestError(
+        "Error code: 400 - {...}", response=httpx2.Response(400, request=request),
+        body={"type": "error", "error": {"type": "invalid_request_error", "message": "image exceeds 5 MB maximum"}})
+    with pytest.raises(VisionError) as exc:
+        analyze(jpg_photos, "", "", model="m", timeout=5, api_key="sk", make_client=fake_client(error=error))
+    assert exc.value.status == 502 and "image exceeds 5 MB maximum" in exc.value.message
 
 
 def test_analyze_without_key_or_cli_explains_both_options():

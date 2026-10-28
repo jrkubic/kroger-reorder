@@ -55,6 +55,10 @@ class VisionError(Exception):
         self.message = message
 
 
+def _timeout_error(timeout: float) -> VisionError:
+    return VisionError(504, f"Claude took longer than {int(timeout)} seconds; try fewer or smaller photos.")
+
+
 @dataclass
 class Suggestion:
     name: str
@@ -164,15 +168,26 @@ def analyze_api(photos: list[Path], note: str, profile: str, *, model: str, time
         raise VisionError(502, "Anthropic rejected ANTHROPIC_API_KEY; check the key in .env.") from exc
     except anthropic.RateLimitError as exc:
         raise VisionError(503, "Anthropic rate limit reached; wait a minute and try again.") from exc
+    except anthropic.NotFoundError as exc:
+        raise VisionError(502, f"Anthropic doesn't know model '{model}'; check PHOTO_MODEL in .env.") from exc
+    except (anthropic.OverloadedError, anthropic.ServiceUnavailableError) as exc:
+        raise VisionError(503, "Anthropic is busy; try again in a minute.") from exc
     except anthropic.APITimeoutError as exc:
-        raise VisionError(504, f"Claude took longer than {int(timeout)} seconds; try fewer or smaller photos.") from exc
+        raise _timeout_error(timeout) from exc
     except anthropic.APIConnectionError as exc:
         raise VisionError(502, "Couldn't reach Anthropic; check the network on the computer running the app.") from exc
     except anthropic.APIStatusError as exc:
+        detail = exc.message
+        if isinstance(exc.body, dict):
+            detail = exc.body.get("error", {}).get("message") or detail
+        raise VisionError(502, f"Anthropic error: {detail}") from exc
+    except anthropic.APIError as exc:
         raise VisionError(502, f"Anthropic error: {exc.message}") from exc
-    if getattr(message, "stop_reason", None) == "refusal":
+    if message.stop_reason == "refusal":
         raise VisionError(502, "Claude declined to analyze these photos; try different ones.")
-    text = "".join(block.text for block in message.content if getattr(block, "type", "") == "text")
+    if message.stop_reason == "max_tokens":
+        raise VisionError(502, "Claude's answer was cut off; try fewer photos or a shorter note.")
+    text = "".join(block.text for block in message.content if block.type == "text")
     return parse_suggestions(text)
 
 
@@ -185,7 +200,7 @@ def run_cli(args: list[str], stdin_text: str, timeout: float) -> RunResult:
         proc = subprocess.run(args, input=stdin_text, capture_output=True, text=True, encoding="utf-8",
                               timeout=timeout)
     except subprocess.TimeoutExpired as exc:
-        raise VisionError(504, f"Claude took longer than {int(timeout)} seconds; try fewer or smaller photos.") from exc
+        raise _timeout_error(timeout) from exc
     return RunResult(proc.returncode, proc.stdout or "", proc.stderr or "")
 
 
