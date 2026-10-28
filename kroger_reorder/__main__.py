@@ -13,14 +13,23 @@ import socket
 import sys
 import threading
 import webbrowser
+from functools import partial
 from pathlib import Path
 
 import uvicorn
 
+from . import __version__
 from .kroger import KrogerClient
 from .main import create_app
 from .settings import load_settings
 from .storage import Storage
+from .vision import analyze, choose_backend
+
+PHOTO_LABELS = {
+    "api": "Anthropic API (ANTHROPIC_API_KEY)",
+    "cli": "Claude Code on this computer",
+    None: "off (set ANTHROPIC_API_KEY in .env, or install Claude Code)",
+}
 
 
 def lan_ip() -> str | None:
@@ -62,27 +71,38 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--no-browser", action="store_true", help="don't open the page in a browser at startup")
     parser.add_argument("--launcher", action="store_true",
                         help="Start Menu behaviour: if the server is already running just open the page, else start it")
+    parser.add_argument("--version", action="version", version=f"kroger-reorder {__version__}")
     args = parser.parse_args(argv)
     attach_log_when_headless()
 
     settings = load_settings()
-    local = f"http://localhost:{settings.port}"
+    local = settings.local_url
     if args.launcher and port_in_use(settings.port):
         webbrowser.open(local)
         return
-    storage = Storage()
+    storage = Storage(settings.data_dir)
     kroger = KrogerClient(settings.client_id, settings.client_secret, settings.redirect_uri, storage)
-    app = create_app(storage, kroger, photo_model=settings.photo_model,
-                     photo_timeout=settings.photo_timeout)  # also migrates v1 data and ensures a default list
+    backend = choose_backend(api_key=settings.anthropic_api_key)
+    app = create_app(
+        storage, kroger,
+        photo_model=settings.photo_model, photo_timeout=settings.photo_timeout,
+        analyzer=partial(analyze, api_key=settings.anthropic_api_key),
+        photo_backend=backend, public_url=settings.public_url,
+    )  # also migrates v1 data and ensures a default list
     if port_in_use(settings.port):
         sys.exit(
             f"Port {settings.port} is already in use (is Kroger Reorder already running?). "
             "Close it, or set PORT in .env and update the redirect URL on your Kroger app."
         )
-    print(f"Kroger Reorder running at {local}", flush=True)
+    print(f"Kroger Reorder {__version__} running at {local}", flush=True)
+    if settings.public_url != local:
+        print(f"  Public URL:    {settings.public_url}", flush=True)
     if ip := lan_ip():
         print(f"  On your wifi:  http://{ip}:{settings.port}", flush=True)
-    print("  Sign in to Kroger from this computer; other devices share the sign-in.  (Ctrl+C to stop)", flush=True)
+    print(f"  Data folder:   {settings.data_dir}", flush=True)
+    print(f"  Photos:        {PHOTO_LABELS[backend]}", flush=True)
+    print("  Sign in to Kroger from this computer (or at the public URL); other devices share the sign-in.  (Ctrl+C to stop)",
+          flush=True)
     if not args.no_browser:
         threading.Timer(1.0, webbrowser.open, args=(local,)).start()
     uvicorn.run(app, host="0.0.0.0", port=settings.port, log_level="warning")

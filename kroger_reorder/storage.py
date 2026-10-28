@@ -11,7 +11,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-DATA_DIR = Path("data")  # relative to the working directory; __main__ passes settings.data_dir explicitly
 LISTS_DIR = "lists"
 LEGACY_LIST = "list.json"
 DEFAULT_LIST_NAME = "Standard"
@@ -79,7 +78,7 @@ def parse_items(raw: Any) -> list[Item]:
 
 
 class Storage:
-    def __init__(self, data_dir: Path = DATA_DIR) -> None:
+    def __init__(self, data_dir: Path) -> None:
         self.data_dir = Path(data_dir)
         self.lists_dir = self.data_dir / LISTS_DIR
         self.lists_dir.mkdir(parents=True, exist_ok=True)

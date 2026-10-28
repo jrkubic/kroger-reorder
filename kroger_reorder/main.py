@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from .importer import parse as parse_import
 from .kroger import KrogerError, NotSignedIn
 from .orders import build_order
+from .settings import DEFAULT_PHOTO_MODEL
 from .storage import Item, ListLoad, Storage
 from .usage import profile_text, usage_profile
 from .vision import VisionError, analyze as analyze_photos
@@ -115,10 +116,12 @@ class OrderNotFound(Exception):
         self.order_id = order_id
 
 
-def create_app(storage: Storage, kroger, *, photo_model: str = "claude-opus-5", photo_timeout: float = 90.0,
-               analyzer=analyze_photos) -> FastAPI:
+def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MODEL, photo_timeout: float = 90.0,
+               analyzer=analyze_photos, photo_backend: str | None = None,
+               public_url: str = "http://localhost:8000") -> FastAPI:
     """`kroger` is a KrogerClient or anything with the same methods (tests pass a fake).
-    `analyzer` has the signature of vision.analyze; tests pass a fake so Claude Code is never started."""
+    `analyzer` has the signature of vision.analyze; tests pass a fake so nothing external is called.
+    `photo_backend` ('api' | 'cli' | None) and `public_url` are reported to the page via /api/state."""
     storage.ensure_ready()
     app = FastAPI(title="Kroger Reorder")
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -216,7 +219,8 @@ def create_app(storage: Storage, kroger, *, photo_model: str = "claude-opus-5", 
     def state():
         config = storage.load_config()
         store = {"store_id": config["store_id"], "store_name": config.get("store_name", "")} if config.get("store_id") else None
-        return {"store": store, "signed_in": kroger.is_signed_in(), **lists_payload()}
+        return {"store": store, "signed_in": kroger.is_signed_in(), "photo_backend": photo_backend,
+                "public_url": public_url, **lists_payload()}
 
     @app.get("/api/stores")
     def stores(zip: str):

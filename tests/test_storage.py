@@ -1,7 +1,6 @@
 # tests/test_storage.py
 import json
 import threading
-from pathlib import Path
 
 import pytest
 
@@ -392,10 +391,3 @@ def test_wrong_shape_orders_file_is_backed_up_and_entries_without_id_are_skipped
     (tmp_path / "orders.json").write_text(json.dumps({"orders": [{"placed_at": "x"}, order("ok", "2026-10-26T13:00:00+00:00")]}),
                                           encoding="utf-8")
     assert [o["id"] for o in s.list_orders()] == ["ok"]
-
-
-# -- default data dir -------------------------------------------------------
-
-def test_default_data_dir_is_relative_to_cwd(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    assert Storage().data_dir == Path("data")

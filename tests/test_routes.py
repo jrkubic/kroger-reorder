@@ -94,7 +94,14 @@ def test_initial_state_has_default_list(client):
         "store": None, "signed_in": False,
         "lists": [{"slug": "standard", "name": "Standard", "count": 0}],
         "active_list": "standard",
+        "photo_backend": None, "public_url": "http://localhost:8000",
     }
+
+
+def test_state_reports_photo_backend_and_public_url(storage, kroger):
+    app = create_app(storage, kroger, photo_backend="api", public_url="http://nas.local:8000")
+    s = TestClient(app).get("/api/state").json()
+    assert s["photo_backend"] == "api" and s["public_url"] == "http://nas.local:8000"
 
 
 def test_find_stores(client):
