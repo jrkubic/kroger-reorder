@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_DIR = Path("data")  # relative to the working directory; __main__ passes settings.data_dir explicitly
 LISTS_DIR = "lists"
 LEGACY_LIST = "list.json"
 DEFAULT_LIST_NAME = "Standard"
