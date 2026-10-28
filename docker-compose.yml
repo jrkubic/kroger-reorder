@@ -3,6 +3,8 @@ services:
   kroger-reorder:
     build: .
     env_file: .env
+    environment:
+      KROGER_REORDER_DATA: /data   # pin: a KROGER_REORDER_DATA line in .env must not move data off the volume
     ports:
       - "${PORT:-8000}:${PORT:-8000}"
     volumes:
