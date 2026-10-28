@@ -317,6 +317,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ### Task 3: Storage default is the working directory's `data/`
 
+> **Superseded during implementation (Task 5):** `Storage(data_dir)` is now a required argument, the `DATA_DIR` constant is gone, and no storage default test exists. The `./data` default lives in `settings.DEFAULT_DATA_DIR`. The version string shipped as `5.0.0`, not `4.0.0`.
+
 **Files:**
 - Modify: `kroger_reorder/storage.py:14`
 - Test: `tests/test_storage.py`

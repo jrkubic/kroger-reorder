@@ -194,7 +194,7 @@ All settings live in `.env` (or the process environment, which wins). Only the f
 | `KROGER_CLIENT_ID`, `KROGER_CLIENT_SECRET` | | From your Kroger developer app. |
 | `PORT` | `8000` | Port to listen on. The redirect URL on the Kroger app must use the same port. |
 | `PUBLIC_URL` | `http://localhost:<PORT>` | Origin browsers use to reach the app when it runs on another machine. The OAuth redirect becomes `<PUBLIC_URL>/callback`. |
-| `KROGER_REORDER_DATA` | `./data` | Folder for lists, config, tokens, and order history. The compose file pins it to the `./data` volume. |
+| `KROGER_REORDER_DATA` | `./data` | Folder for lists, config, tokens, and order history, relative to the directory you start the server from. The compose file pins it to the `./data` volume. |
 | `ANTHROPIC_API_KEY` | unset | Enables the API photo backend. Unset means Claude Code. |
 | `PHOTO_MODEL` | `claude-opus-5-5` | Model used for photo suggestions by either backend. |
 | `PHOTO_TIMEOUT` | `90` | Seconds to wait for a photo analysis. |
@@ -237,7 +237,7 @@ On macOS or Linux, use a user-level launchd plist or systemd unit that runs `.ve
 
 The Kroger sign-in is a browser redirect back to the app, so the browser you sign in from has to reach the app at a URL that is registered on your Kroger developer app. Two ways when the app runs on a NAS, a Raspberry Pi, or a server:
 
-**Set `PUBLIC_URL`.** Put `PUBLIC_URL=http://nas.local:8000` (whatever address you use to reach the box) in `.env`, and register `http://nas.local:8000/callback` as the redirect URL on the Kroger app. The **Sign in to Kroger** button then appears when you open the app at that exact address. Kroger's portal accepts plain `http://` for private addresses at the time of writing; if it insists on `https://`, put the app behind any reverse proxy that terminates TLS and use that URL.
+**Set `PUBLIC_URL`.** Put `PUBLIC_URL=http://nas.local:8000` (whatever address you use to reach the box; scheme, host and port only, no path) in `.env`, and register `http://nas.local:8000/callback` as the redirect URL on the Kroger app. The **Sign in to Kroger** button then appears when you open the app at that exact address. Kroger's portal accepts plain `http://` for private addresses at the time of writing; if it insists on `https://`, put the app behind any reverse proxy that terminates TLS and use that URL.
 
 **Or tunnel once.** Leave `PUBLIC_URL` unset, run `ssh -L 8000:localhost:8000 user@nas` from a PC, open http://localhost:8000 there, and sign in. Tokens are stored on the server, so this is a one-time step until Kroger revokes the refresh token.
 
@@ -435,11 +435,12 @@ These come from Kroger's public API, not from the app:
 | `Kroger said: ...` | The raw message from Kroger's API. If it mentions rate limits, wait a minute. |
 | `Port 8000 is already in use` | Another copy is running, or something else owns the port. Close it, or set `PORT` in `.env` and update the redirect URL on your Kroger app to match. |
 | Phone cannot reach the wifi address | Allow `python.exe` / `pythonw.exe` through Windows Firewall on private networks, and confirm the PC's address has not changed. |
-| Cannot sign in from a phone | Expected. Sign in once from the PC. |
+| Cannot sign in from a phone | Expected. Sign in once from the PC, or from the address in `PUBLIC_URL`. |
 | Cannot delete a list | The last list cannot be deleted. Create another first. |
 | Buttons do nothing after an update | Reload the page. Versions before v3 could run a stale cached script; this is fixed. |
 | `Photos can't be analyzed: set ANTHROPIC_API_KEY...` after **Suggest a list** | Neither backend is configured. Add `ANTHROPIC_API_KEY` to `.env`, or install Claude Code on the computer running the app and sign in, then restart the app. |
-| `Anthropic rejected ANTHROPIC_API_KEY` | The key is wrong, revoked, or has no credit. Check it at https://console.anthropic.com. |
+| `Anthropic rejected ANTHROPIC_API_KEY` | The key is wrong or revoked. Check it at https://console.anthropic.com. |
+| `Anthropic error: ...` | Anthropic's own message, for example a credit balance that is too low or an image that is too large. |
 | `Anthropic rate limit reached` | Wait a minute. Persistent? Your Anthropic plan's limits are lower than four photos per request allows; try fewer photos. |
 | `Claude Code failed: ...` | Usually a sign-in or usage-limit problem on the PC. Run `claude` there once to check, then try again. |
 | Sign-in button missing on a NAS or server install | Open the app at exactly the address in `PUBLIC_URL`, or use the SSH tunnel in [Running on another machine](#running-on-another-machine). |
