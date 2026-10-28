@@ -1,8 +1,10 @@
 # Kroger Reorder
 
+[![CI](https://github.com/jrkubic/kroger-reorder/actions/workflows/ci.yml/badge.svg)](https://github.com/jrkubic/kroger-reorder/actions/workflows/ci.yml)
+
 A small self-hosted web app that fills your Kroger pickup cart from saved grocery lists in one click. Keep several named lists, see product photos and sale prices, import and export lists as CSV, and look back at everything you have sent to the cart. Checkout (pickup time, payment) still happens in the Kroger app or at kroger.com, because Kroger's public API stops at the cart.
 
-Runs on one Windows PC, is reachable from every phone on the same wifi, and stores everything as plain JSON files you can read and edit.
+Runs on a Windows PC, a Mac, a Linux box, or in Docker; is reachable from every phone on the same wifi; and stores everything as plain JSON files you can read and edit.
 
 ## Table of contents
 
@@ -11,7 +13,9 @@ Runs on one Windows PC, is reachable from every phone on the same wifi, and stor
 - [Technology](#technology)
 - [Project structure](#project-structure)
 - [Getting started](#getting-started)
-- [Running on startup](#running-on-startup)
+- [Configuration](#configuration)
+- [Running on startup (Windows)](#running-on-startup-windows)
+- [Running on another machine](#running-on-another-machine)
 - [Using the app](#using-the-app)
 - [Data and privacy](#data-and-privacy)
 - [HTTP API](#http-api)
@@ -46,17 +50,17 @@ Runs on one Windows PC, is reachable from every phone on the same wifi, and stor
 - **Order history.** Every successful send is recorded with date, list, items, and an estimated total. Any past order can be sent to the cart again or deleted.
 - **Import.** Plain text, Markdown checklists, CSV, TSV from a spreadsheet, JSON, or the app's own export. Reviewed in a table before adding.
 - **Export.** Download any list as CSV. Re-importing it recreates the list exactly, on this or another install.
-- **Photo suggestions.** Photograph your fridge, pantry or cupboard from any device on the wifi, add a note, and Claude proposes a list: what it sees, what looks low or missing, and what your note asks for. Every line is reviewed against the store catalog before it is added.
+- **Photo suggestions.** Photograph your fridge, pantry or cupboard from any device on the wifi, add a note, and Claude proposes a list: what it sees, what looks low or missing, and what your note asks for. Every line is reviewed against the store catalog before it is added. Works through your own Anthropic API key, or through Claude Code installed on the host.
 - **Usage profile.** Derived from order history: how often you buy each item, the usual quantity, and when it is due again. Shown on the Orders tab and used to make photo suggestions smarter over time.
 - **Phone access.** The server binds to your LAN. Sign in once on the PC and every device shares it.
-- **Start with Windows.** One script installs a hidden startup entry so the app is always available.
+- **Start with Windows.** One script installs a hidden startup entry so the app is always available. Docker users get the same with `restart: unless-stopped`.
 - **Plain files.** Lists, config, tokens, and history are JSON under `data/`. Corrupt files are moved aside, never deleted.
 
 ## Technology
 
 | Layer | Choice | Role |
 |---|---|---|
-| Language | Python 3.12+ (developed on 3.14) | Server, Kroger client, storage, import parser |
+| Language | Python 3.12+ (tested on 3.12, 3.13, 3.14) | Server, Kroger client, storage, import parser |
 | Web framework | [FastAPI](https://fastapi.tiangolo.com/) 0.115+ on [Starlette](https://www.starlette.io/) | Routing, JSON API, static files, middleware |
 | Validation | [pydantic](https://docs.pydantic.dev/) v2 | Request body models |
 | HTTP client | [httpx](https://www.python-httpx.org/) | Calls to the Kroger API; `MockTransport` in tests |
@@ -64,40 +68,47 @@ Runs on one Windows PC, is reachable from every phone on the same wifi, and stor
 | Configuration | [python-dotenv](https://github.com/theskumar/python-dotenv) | Loads credentials from `.env` |
 | Front end | HTML5, CSS, vanilla JavaScript (ES2020) | One page, no build step, no framework |
 | Persistence | JSON files | One file per list, plus config, tokens, and orders |
-| Testing | [pytest](https://docs.pytest.org/) with Starlette `TestClient` | 183 tests, no network access |
+| Testing | [pytest](https://docs.pytest.org/) with Starlette `TestClient` | 207 tests, no network access |
 | Packaging | `pyproject.toml` with setuptools | `pip install -e .` and a `kroger-reorder` console script |
 | Automation | PowerShell 5.1 | Windows startup installer |
 | External API | [Kroger Public API](https://developer.kroger.com/) | Locations, Products, Cart, OAuth 2.0 |
-| Vision | [Claude Code](https://code.claude.com/docs) run headlessly (`claude -p`) with Claude Opus 5 | Photo analysis for suggested lists, on the host's Claude subscription |
+| Vision | [`anthropic`](https://github.com/anthropics/anthropic-sdk-python) SDK, or [Claude Code](https://code.claude.com/docs) run headlessly (`claude -p`) | Photo analysis for suggested lists: API key, or the host's Claude subscription |
+| Containers | Docker, docker compose | Optional self-hosting path |
+| CI | GitHub Actions | pytest on Windows, Ubuntu, macOS × Python 3.12, 3.13; Docker build |
 
-No JavaScript dependencies or bundler. The page is served as-is from `app/static/`.
+No JavaScript dependencies or bundler. The page is served as-is from `kroger_reorder/static/`.
 
 ## Project structure
 
 ```
 kroger-reorder/
-├── app/
-│   ├── __main__.py        Entry point: python -m app [--no-browser] [--launcher]
+├── kroger_reorder/
+│   ├── __init__.py        Package version
+│   ├── __main__.py        Entry point: python -m kroger_reorder [--no-browser] [--launcher]
 │   ├── main.py            FastAPI app factory and every HTTP route
 │   ├── kroger.py          Kroger API client: OAuth, locations, products, cart
 │   ├── storage.py         JSON persistence: lists, config, tokens, order history
 │   ├── orders.py          Builds an order snapshot after a successful send
 │   ├── importer.py        Parses text, Markdown, CSV, TSV, and JSON into lines
-│   ├── vision.py          Photo suggestions through headless Claude Code
+│   ├── vision.py          Photo suggestions: Anthropic API or headless Claude Code
 │   ├── usage.py           Usage profile derived from order history
-│   ├── settings.py        Reads credentials and port from .env
+│   ├── settings.py        Reads configuration from .env
 │   └── static/
 │       ├── index.html     The single page and its styles
 │       └── app.js         Page logic, talks to the JSON API
-├── tests/                 pytest suite, one module per app module
+├── tests/                 pytest suite, one module per package module
 ├── docs/plans/            Design documents and implementation plans per version
 ├── scripts/
-│   ├── install-startup.ps1  Adds or removes the Windows startup entry
+│   ├── install-startup.ps1     Adds or removes the Windows startup entry
 │   └── install-start-menu.ps1  Adds or removes the Start Menu shortcut
+├── .github/workflows/ci.yml   Tests on three OSes, Docker build
 ├── img/                   Screenshots for this README and the app icon
-├── data/                  Your lists, config, tokens, orders (gitignored)
-├── .env                   Kroger credentials (gitignored)
-├── .env.example           Template for .env
+├── data/                  Your lists, config, tokens, orders (gitignored; see KROGER_REORDER_DATA)
+├── .env                   Credentials and settings (gitignored)
+├── .env.example           Template for .env, documents every setting
+├── Dockerfile             Container image
+├── docker-compose.yml     One-service compose file with a data volume
+├── requirements.lock      Exact dependency versions the author tests with
 └── pyproject.toml         Package metadata and dependencies
 ```
 
@@ -105,45 +116,97 @@ kroger-reorder/
 
 ### Prerequisites
 
-- Windows 10 or 11 (the startup script is Windows-only; the app itself runs anywhere Python does)
-- Python 3.12 or newer
-- A Kroger account and a free developer app (next step)
+- A Kroger account and a free developer app (step 1 below)
+- One of: Python 3.12 or newer, or Docker
 
 ### 1. Register a Kroger developer app
 
 1. Go to https://developer.kroger.com and sign in with your regular Kroger account.
 2. Open **My Apps** and create a new app. Any name works, for example `kroger-reorder`.
-3. Under **Redirect URL** enter exactly `http://localhost:8000/callback`.
+3. Under **Redirect URL** enter exactly `http://localhost:8000/callback`. (Running the app on another machine? See [Running on another machine](#running-on-another-machine) for what to enter instead.)
 4. Make sure the app can use the **Products**, **Locations**, and **Cart** APIs. If the portal does not ask, they are included.
 5. Save, then copy the **Client ID** and **Client Secret**.
 
-### 2. Install
+### 2. Get the code and fill in `.env`
+
+```bash
+git clone https://github.com/jrkubic/kroger-reorder.git
+cd kroger-reorder
+cp .env.example .env        # Windows PowerShell: copy .env.example .env
+```
+
+Open `.env` and paste in your Client ID and Client Secret. Every other setting is optional and documented in the file; see [Configuration](#configuration).
+
+### 3. Install and run
+
+**Windows (PowerShell)**
 
 ```powershell
-cd C:\Projects\kroger-reorder
 python -m venv .venv
 .venv\Scripts\python -m pip install -e .
-copy .env.example .env
+.venv\Scripts\python -m kroger_reorder
 ```
 
-Open `.env` and paste in your Client ID and Client Secret.
+**macOS / Linux**
 
-### 3. Run
-
-```powershell
-.venv\Scripts\python -m app
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m kroger_reorder
 ```
 
-Your browser opens http://localhost:8000. Enter your zip code, pick your store, and click **Sign in to Kroger**. You do this once; the app stays signed in with a refresh token.
+**Docker**
 
-The console also prints a wifi address such as `http://192.168.1.20:8000`. Open that on your phone or any device on the same network. Sign in from the PC; every device shares the sign-in.
+```bash
+docker compose up -d
+docker compose logs -f     # Ctrl+C to stop following; the container keeps running
+```
 
-## Running on startup
+Lists, tokens, and order history persist in `./data`. Photo suggestions inside Docker need `ANTHROPIC_API_KEY` in `.env` (there is no Claude Code in the image).
+
+Three Docker notes. The compose file pins the data folder to the `./data` bind mount, so leave `KROGER_REORDER_DATA` unset in `.env` when using Docker. On Linux hosts the container runs as root, so files under `./data` are root-owned; use `sudo` to edit them by hand, or `chown` the folder once. The startup banner's "On your wifi" line shows the container's internal address, which is not reachable from your network; set `PUBLIC_URL` to the address you actually use and ignore that line.
+
+Prefer the exact dependency versions the author tests with? `pip install -r requirements.lock` then `pip install --no-deps -e .`.
+
+### 4. First run
+
+Your browser opens http://localhost:8000 (Docker: open it yourself). Enter your zip code, pick your store, and click **Sign in to Kroger**. You do this once; the app stays signed in with a refresh token.
+
+The console also prints a wifi address such as `http://192.168.1.20:8000`. Open that on your phone or any device on the same network. Sign in from the PC (or from the public URL, see below); every device shares the sign-in.
+
+### 5. Optional: photo suggestions
+
+The **Photo** button turns pictures of your fridge or pantry into a suggested list. Pick one of two backends:
+
+| Backend | Set up | Cost |
+|---|---|---|
+| Anthropic API | Create a key at https://console.anthropic.com and put it in `.env` as `ANTHROPIC_API_KEY`. Works on every platform including Docker. | Pay per use. A four-photo request on the default model is a few cents. |
+| Claude Code | Install [Claude Code](https://code.claude.com/docs) on the computer running the app, run `claude` once to sign in, and leave `ANTHROPIC_API_KEY` unset. | Uses your Claude subscription. Not available in Docker. |
+
+The photo dialog says which backend is active. `PHOTO_MODEL` in `.env` applies to both; the default is `claude-opus-5-5`.
+
+## Configuration
+
+All settings live in `.env` (or the process environment, which wins). Only the first two are required.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `KROGER_CLIENT_ID`, `KROGER_CLIENT_SECRET` | | From your Kroger developer app. |
+| `PORT` | `8000` | Port to listen on. The redirect URL on the Kroger app must use the same port. |
+| `PUBLIC_URL` | `http://localhost:<PORT>` | Origin browsers use to reach the app when it runs on another machine. The OAuth redirect becomes `<PUBLIC_URL>/callback`. |
+| `KROGER_REORDER_DATA` | `./data` | Folder for lists, config, tokens, and order history. The compose file pins it to the `./data` volume. |
+| `ANTHROPIC_API_KEY` | unset | Enables the API photo backend. Unset means Claude Code. |
+| `PHOTO_MODEL` | `claude-opus-5-5` | Model used for photo suggestions by either backend. |
+| `PHOTO_TIMEOUT` | `90` | Seconds to wait for a photo analysis. |
+
+The server prints the data folder and the active photo backend when it starts, so you can confirm what it picked up.
+
+## Running on startup (Windows)
 
 To keep the server running whenever the PC is signed in, so your phone can open the list without touching the computer:
 
 ```powershell
-cd C:\Projects\kroger-reorder
+cd kroger-reorder
 .\scripts\install-startup.ps1
 ```
 
@@ -156,7 +219,7 @@ Check two things once:
 - The first hidden start may trigger a Windows Firewall prompt for `pythonw.exe` on private networks. Click **Allow**, or phones cannot reach it.
 - The wifi address comes from your router and can change. Reserve the PC's address in the router's DHCP settings so the phone bookmark keeps working.
 
-`python -m app --no-browser` is the same thing run by hand without opening a browser tab.
+`python -m kroger_reorder --no-browser` is the same thing run by hand without opening a browser tab.
 
 ### Start Menu shortcut
 
@@ -166,7 +229,19 @@ For a one-click way in, add a "Kroger Reorder" app to the Start Menu:
 .\scripts\install-start-menu.ps1
 ```
 
-Press the Windows key, type "Kroger", and press Enter. If the server is already running it just opens the page; if not, it starts the server hidden and then opens the page. The icon is `img/kroger-reorder.ico`. Remove it with `.\scripts\install-start-menu.ps1 -Remove`. Under the hood the shortcut runs `python -m app --launcher`.
+Press the Windows key, type "Kroger", and press Enter. If the server is already running it just opens the page; if not, it starts the server hidden and then opens the page. The icon is `img/kroger-reorder.ico`. Remove it with `.\scripts\install-start-menu.ps1 -Remove`. Under the hood the shortcut runs `python -m kroger_reorder --launcher`.
+
+On macOS or Linux, use a user-level launchd plist or systemd unit that runs `.venv/bin/kroger-reorder --no-browser` from the checkout directory, or just use Docker with `restart: unless-stopped`.
+
+## Running on another machine
+
+The Kroger sign-in is a browser redirect back to the app, so the browser you sign in from has to reach the app at a URL that is registered on your Kroger developer app. Two ways when the app runs on a NAS, a Raspberry Pi, or a server:
+
+**Set `PUBLIC_URL`.** Put `PUBLIC_URL=http://nas.local:8000` (whatever address you use to reach the box) in `.env`, and register `http://nas.local:8000/callback` as the redirect URL on the Kroger app. The **Sign in to Kroger** button then appears when you open the app at that exact address. Kroger's portal accepts plain `http://` for private addresses at the time of writing; if it insists on `https://`, put the app behind any reverse proxy that terminates TLS and use that URL.
+
+**Or tunnel once.** Leave `PUBLIC_URL` unset, run `ssh -L 8000:localhost:8000 user@nas` from a PC, open http://localhost:8000 there, and sign in. Tokens are stored on the server, so this is a one-time step until Kroger revokes the refresh token.
+
+Phones on the wifi open the app by its normal address either way; they never need to sign in.
 
 ## Using the app
 
@@ -210,9 +285,9 @@ Each line is matched against your store's catalog. Pick a different match or ski
 
 Click **Photo**, choose which list the items should go to (or **New list…**), then add up to four photos. On a phone the picker offers both the camera and your photo library. Add a note if you like, such as "family of 4, out of eggs, taco night this week", and click **Suggest a list**.
 
-The photos are shrunk in the browser, sent to the PC running the app, and handed to the Claude Code installation there together with your note and your usage profile. After 10 to 30 seconds the import review table opens with every suggestion tagged **seen** (visible in a photo) or **suggested** (looks empty, low, absent, overdue by your history, or asked for in the note), each with a one-line reason and a catalog match you can change or skip. **Add to list** works as for any import. Photos are deleted as soon as the analysis finishes and are never stored.
+The photos are shrunk in the browser, sent to the computer running the app, and handed to the photo backend there (the Anthropic API or a local Claude Code install) together with your note and your usage profile. After 10 to 30 seconds the import review table opens with every suggestion tagged **seen** (visible in a photo) or **suggested** (looks empty, low, absent, overdue by your history, or asked for in the note), each with a one-line reason and a catalog match you can change or skip. **Add to list** works as for any import. Photos are deleted as soon as the analysis finishes and are never stored.
 
-Requirements: [Claude Code](https://code.claude.com/docs) installed and signed in on the PC running the app. Analyses count against that Claude subscription's usage. `PHOTO_MODEL` and `PHOTO_TIMEOUT` in `.env` change the model (default Claude Opus 5) and the time limit (default 90 seconds).
+Requirements: an `ANTHROPIC_API_KEY` in `.env`, or [Claude Code](https://code.claude.com/docs) installed and signed in on the computer running the app; see [Optional: photo suggestions](#5-optional-photo-suggestions). `PHOTO_MODEL` and `PHOTO_TIMEOUT` in `.env` change the model (default `claude-opus-5-5`) and the time limit (default 90 seconds).
 
 ### Usage profile
 
@@ -242,7 +317,7 @@ Everything lives in `data/`, which is gitignored:
 
 An unreadable or malformed file is shown as a warning and moved aside as `<file>.corrupt-<timestamp>` before the app writes to it again. Nothing is ever deleted automatically.
 
-Credentials stay in `.env`, also gitignored. Nothing leaves your machine except calls to `api.kroger.com`. The page has no login; it trusts your home network, so do not expose port 8000 to the internet.
+Credentials stay in `.env`, also gitignored. Nothing leaves your machine except calls to `api.kroger.com` and, for photo suggestions, the photos and note sent to Anthropic. The page has no login; it trusts your home network, so do not expose port 8000 to the internet.
 
 ## HTTP API
 
@@ -252,7 +327,7 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/state` | Store, sign-in status, lists, active list |
+| `GET` | `/api/state` | Store, sign-in status, lists, active list, `photo_backend` (`"api"`, `"cli"`, or `null`), `public_url` |
 | `GET` | `/api/stores?zip=` | Stores near a zip code |
 | `PUT` | `/api/store` | Choose a store |
 | `GET` | `/auth/login` | Redirect to Kroger OAuth |
@@ -304,13 +379,16 @@ A push that Kroger rejects returns `502` with `bad_upcs` listing the offending i
 ## Development
 
 ```powershell
-.venv\Scripts\python -m pip install -e ".[dev]"
+.venv\Scripts\python -m pip install -e ".[dev]"     # macOS/Linux: .venv/bin/python
 .venv\Scripts\python -m pytest -q
 ```
 
 Conventions:
 
 - Tests never touch the network or `data/`. The Kroger client is exercised through `httpx.MockTransport`; routes use a fake client and a temporary directory.
+- Tests never need a `.env`; settings are passed in explicitly.
+- CI runs the suite on Windows, Ubuntu, and macOS for Python 3.12 and 3.13, and builds the Docker image, on every push and pull request.
+- Bump `__version__` in `kroger_reorder/__init__.py` and add a row to [Version history](#version-history) when a version ships.
 - Each feature ships with a design document and an implementation plan under `docs/plans/`, written before the code.
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`), scoped to the module where useful.
 - The page and static files are served with `Cache-Control: no-cache`, and the script URL carries a version stamp, so browsers never run an old `app.js` against a new page.
@@ -344,7 +422,7 @@ These come from Kroger's public API, not from the app:
 - It can add to the cart but cannot read, clear, or check out the cart. Start from an empty cart or quantities double.
 - It cannot read past orders. History covers only what this app sent.
 - It has no access to digital coupons. Clip them in the Kroger app.
-- Sign-in works only from the PC running the app, because the OAuth redirect URL is `localhost`. Other devices share the stored tokens.
+- Sign-in works from the machine running the app, or from the address in `PUBLIC_URL`. Other devices share the stored tokens.
 
 ## Troubleshooting
 
@@ -360,8 +438,12 @@ These come from Kroger's public API, not from the app:
 | Cannot sign in from a phone | Expected. Sign in once from the PC. |
 | Cannot delete a list | The last list cannot be deleted. Create another first. |
 | Buttons do nothing after an update | Reload the page. Versions before v3 could run a stale cached script; this is fixed. |
-| `Claude Code isn't installed...` after **Suggest a list** | Install Claude Code on the PC running the app and sign in, then restart the app so it is on the PATH. |
+| `Photos can't be analyzed: set ANTHROPIC_API_KEY...` after **Suggest a list** | Neither backend is configured. Add `ANTHROPIC_API_KEY` to `.env`, or install Claude Code on the computer running the app and sign in, then restart the app. |
+| `Anthropic rejected ANTHROPIC_API_KEY` | The key is wrong, revoked, or has no credit. Check it at https://console.anthropic.com. |
+| `Anthropic rate limit reached` | Wait a minute. Persistent? Your Anthropic plan's limits are lower than four photos per request allows; try fewer photos. |
 | `Claude Code failed: ...` | Usually a sign-in or usage-limit problem on the PC. Run `claude` there once to check, then try again. |
+| Sign-in button missing on a NAS or server install | Open the app at exactly the address in `PUBLIC_URL`, or use the SSH tunnel in [Running on another machine](#running-on-another-machine). |
+| Docker: `Kroger sign-in failed` with a redirect mismatch | The redirect URL on the Kroger app must be `<PUBLIC_URL>/callback`; set `PUBLIC_URL` in `.env` to the address you open in the browser. |
 | Photo analysis times out | Use fewer or clearer photos, or raise `PHOTO_TIMEOUT` in `.env`. |
 
 ## Resources
@@ -386,6 +468,7 @@ These come from Kroger's public API, not from the app:
 | 2026-10-12 | v2 | Named lists, product images, sale badges, LAN access, import from text/CSV/JSON/Markdown |
 | 2026-10-26 | v3 | Order history with reorder, Orders tab, CSV export and exact re-import, list header buttons, Windows startup installer, cache-safe script loading |
 | 2026-10-26 | v4 | Photo suggestions through headless Claude Code, usage profile from order history |
+| 2026-10-28 | v5 | Package renamed to `kroger_reorder`, Anthropic API photo backend, `PUBLIC_URL` and `KROGER_REORDER_DATA`, Docker, CI on three OSes, lock file, clone-first setup docs |
 
 ## License
 
