@@ -6,8 +6,20 @@ A small self-hosted web app that fills your Kroger pickup cart from saved grocer
 
 Runs on a Windows PC, a Mac, a Linux box, or in Docker; is reachable from every phone on the same wifi; and stores everything as plain JSON files you can read and edit.
 
+## Quick start
+
+```bash
+git clone https://github.com/jrkubic/kroger-reorder.git && cd kroger-reorder
+cp .env.example .env            # paste in the Client ID and Secret from https://developer.kroger.com
+python -m venv .venv && .venv/bin/python -m pip install -e .   # Windows: .venv\Scripts\python
+.venv/bin/python -m kroger_reorder                              # opens http://localhost:8000
+```
+
+Or with Docker: `docker compose up -d`. Full details, including registering the Kroger app and the redirect URL, are under [Getting started](#getting-started). Contributing or pointing an AI agent at the code? Start with [AGENTS.md](AGENTS.md).
+
 ## Table of contents
 
+- [Quick start](#quick-start)
 - [Screenshots](#screenshots)
 - [Features](#features)
 - [Technology](#technology)
@@ -388,10 +400,22 @@ Conventions:
 - Tests never touch the network or `data/`. The Kroger client is exercised through `httpx.MockTransport`; routes use a fake client and a temporary directory.
 - Tests never need a `.env`; settings are passed in explicitly.
 - CI runs the suite on Windows, Ubuntu, and macOS for Python 3.12 and 3.13, and builds the Docker image, on every push and pull request.
-- Bump `__version__` in `kroger_reorder/__init__.py` and add a row to [Version history](#version-history) when a version ships.
 - Each feature ships with a design document and an implementation plan under `docs/plans/`, written before the code.
+- `tests/test_docs.py` guards this README: it fails when a route, a setting in `.env.example`, a module, a design document, or a version bump is missing from the matching section below. See [Adding a feature](#adding-a-feature).
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`), scoped to the module where useful.
 - The page and static files are served with `Cache-Control: no-cache`, and the script URL carries a version stamp, so browsers never run an old `app.js` against a new page.
+
+### Adding a feature
+
+The full contributor guide is [AGENTS.md](AGENTS.md); this is the checklist. A feature is done when all of these are true:
+
+1. A design doc and a plan exist under `docs/plans/` and the design is listed in [Design documents](#design-documents).
+2. Tests were written first and the suite is green locally and in CI.
+3. This README is updated in the same change: [Features](#features), [Using the app](#using-the-app), the [HTTP API](#http-api) tables for any new route, the [Configuration](#configuration) table and `.env.example` for any new setting, [Project structure](#project-structure) for any new module, and [Troubleshooting](#troubleshooting) for any new user-facing error string, quoted verbatim.
+4. If it is a new numbered version: `__version__` in `kroger_reorder/__init__.py` is bumped and a row is added to [Version history](#version-history).
+5. Screenshots in `img/` are refreshed when the UI changed visibly.
+
+Items 1, 3 (routes, settings, modules), and 4 are enforced by `tests/test_docs.py`, so forgetting them fails CI with a message naming what is missing.
 
 ### Manual smoke test
 
@@ -414,6 +438,7 @@ Run once after setup, or after changes that touch the Kroger client:
 | v2 Lists, images, import | [docs/plans/2026-10-12-v2-lists-images-import-design.md](docs/plans/2026-10-12-v2-lists-images-import-design.md) | [docs/plans/2026-10-12-v2-lists-images-import.md](docs/plans/2026-10-12-v2-lists-images-import.md) |
 | v3 Order history | [docs/plans/2026-10-26-order-history-design.md](docs/plans/2026-10-26-order-history-design.md) | [docs/plans/2026-10-26-order-history.md](docs/plans/2026-10-26-order-history.md) |
 | v4 Photo suggestions | [docs/plans/2026-10-26-photo-suggest-design.md](docs/plans/2026-10-26-photo-suggest-design.md) | built directly from the design |
+| v5 Packaging and redeployment | [docs/plans/2026-10-28-packaging-design.md](docs/plans/2026-10-28-packaging-design.md) | [docs/plans/2026-10-28-packaging.md](docs/plans/2026-10-28-packaging.md) |
 
 ## Limitations
 
