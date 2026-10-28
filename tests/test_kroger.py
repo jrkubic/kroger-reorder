@@ -5,8 +5,8 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 
-from app.kroger import KrogerClient, KrogerError, NotSignedIn
-from app.storage import Storage
+from kroger_reorder.kroger import KrogerClient, KrogerError, NotSignedIn
+from kroger_reorder.storage import Storage
 
 
 class FakeKrogerServer:

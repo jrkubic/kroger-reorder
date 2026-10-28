@@ -1,7 +1,7 @@
-# app/__main__.py
-"""`python -m app` (or `kroger-reorder`): start the server for the whole LAN and open the browser.
+# kroger_reorder/__main__.py
+"""`python -m kroger_reorder` (or `kroger-reorder`): start the server for the whole LAN and open the browser.
 
-`python -m app --no-browser` skips opening the browser; use it for the Windows startup entry
+`python -m kroger_reorder --no-browser` skips opening the browser; use it for the Windows startup entry
 (see scripts/install-startup.ps1). When launched with pythonw.exe there is no console, so output
 goes to %LOCALAPPDATA%\\kroger-reorder\\server.log instead.
 """

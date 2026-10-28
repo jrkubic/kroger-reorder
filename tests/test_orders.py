@@ -1,7 +1,7 @@
 # tests/test_orders.py
 from datetime import datetime, timezone
 
-from app.orders import build_order
+from kroger_reorder.orders import build_order
 
 STORE = {"store_id": "01400943", "store_name": "Kroger Hyde Park"}
 NOW = datetime(2026, 10, 26, 13, 14, 0, tzinfo=timezone.utc)

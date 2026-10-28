@@ -6,10 +6,10 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from app.kroger import KrogerError, NotSignedIn
-from app.main import create_app
-from app.storage import Item, Storage
-from app.vision import Suggestion, VisionError
+from kroger_reorder.kroger import KrogerError, NotSignedIn
+from kroger_reorder.main import create_app
+from kroger_reorder.storage import Item, Storage
+from kroger_reorder.vision import Suggestion, VisionError
 
 
 def product(upc, name, **over):

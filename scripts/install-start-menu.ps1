@@ -23,7 +23,7 @@ if (-not (Test-Path $icon)) { throw "Missing $icon." }
 $shell = New-Object -ComObject WScript.Shell
 $sc = $shell.CreateShortcut($link)
 $sc.TargetPath = $pythonw
-$sc.Arguments = '-m app --launcher'
+$sc.Arguments = '-m kroger_reorder --launcher'
 $sc.WorkingDirectory = $root
 $sc.IconLocation = "$icon,0"
 $sc.Description = 'Open Kroger Reorder (starts the server if needed)'

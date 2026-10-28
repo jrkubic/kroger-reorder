@@ -1,5 +1,5 @@
 # tests/test_importer.py
-from app.importer import ParsedLine, parse
+from kroger_reorder.importer import ParsedLine, parse
 
 
 def names(lines):

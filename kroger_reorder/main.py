@@ -1,4 +1,4 @@
-# app/main.py
+# kroger_reorder/main.py
 """FastAPI app: serves the page and a JSON API over Storage + KrogerClient."""
 from __future__ import annotations
 

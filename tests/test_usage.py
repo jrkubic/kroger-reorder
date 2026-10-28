@@ -1,7 +1,7 @@
 # tests/test_usage.py
 from datetime import datetime, timezone
 
-from app.usage import profile_text, usage_profile
+from kroger_reorder.usage import profile_text, usage_profile
 
 NOW = datetime(2026, 10, 26, 12, 0, tzinfo=timezone.utc)
 

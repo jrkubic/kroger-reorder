@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.vision import RunResult, VisionError, analyze, build_prompt, parse_suggestions
+from kroger_reorder.vision import RunResult, VisionError, analyze, build_prompt, parse_suggestions
 
 PHOTOS = [Path("C:/tmp/a.jpg"), Path("C:/tmp/b.jpg")]
 GOOD = [{"name": "whole milk", "quantity": 1, "kind": "seen", "reason": "Half a gallon left"},

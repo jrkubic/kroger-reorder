@@ -1,30 +1,50 @@
 [project]
 name = "kroger-reorder"
-version = "0.1.0"
-description = "Fill a Kroger pickup cart from a saved standard grocery list"
+dynamic = ["version"]
+description = "Self-hosted web app that fills your Kroger pickup cart from saved grocery lists"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Jake Kubicki" }]
 requires-python = ">=3.12"
+classifiers = [
+  "Environment :: Web Environment",
+  "Framework :: FastAPI",
+  "Intended Audience :: End Users/Desktop",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Topic :: Home Automation",
+]
 dependencies = [
   "fastapi>=0.115",
   "uvicorn>=0.30",
   "httpx>=0.27",
   "python-dotenv>=1.0",
+  "anthropic>=1.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 
+[project.urls]
+Homepage = "https://github.com/jrkubic/kroger-reorder"
+Issues = "https://github.com/jrkubic/kroger-reorder/issues"
+
 [project.scripts]
-kroger-reorder = "app.__main__:main"
+kroger-reorder = "kroger_reorder.__main__:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["app"]
+packages = ["kroger_reorder"]
+
+[tool.setuptools.dynamic]
+version = { attr = "kroger_reorder.__version__" }
 
 [tool.setuptools.package-data]
-app = ["static/*"]
+kroger_reorder = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

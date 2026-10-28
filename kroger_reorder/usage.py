@@ -1,4 +1,4 @@
-# app/usage.py
+# kroger_reorder/usage.py
 """Usage profile derived from order history: what the household buys, how often, and when last.
 
 Nothing is stored; it is recomputed from the recorded orders each time it is needed, and it is

@@ -1,4 +1,4 @@
-# app/orders.py
+# kroger_reorder/orders.py
 """Order snapshots: what was sent to the Kroger cart, recorded after Kroger accepted it."""
 from __future__ import annotations
 

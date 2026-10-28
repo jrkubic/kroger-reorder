@@ -1,4 +1,4 @@
-# app/importer.py
+# kroger_reorder/importer.py
 """Turn pasted text (CSV, JSON, Markdown, plain lines) into (name, quantity) lines."""
 from __future__ import annotations
 

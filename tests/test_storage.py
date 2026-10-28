@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from app.storage import Item, Storage, slugify
+from kroger_reorder.storage import Item, Storage, slugify
 
 
 def milk(**over):

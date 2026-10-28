@@ -1,4 +1,4 @@
-# app/storage.py
+# kroger_reorder/storage.py
 """Plain-JSON persistence: named grocery lists, order history, store config, and Kroger tokens."""
 from __future__ import annotations
 

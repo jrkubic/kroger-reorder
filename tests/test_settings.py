@@ -1,6 +1,6 @@
 import pytest
 
-from app.settings import load_settings
+from kroger_reorder.settings import load_settings
 
 
 def test_missing_credentials_exit_with_helpful_message():

@@ -1,4 +1,4 @@
-// Kroger Reorder page logic. Vanilla JS, talks to the JSON API in app/main.py.
+// Kroger Reorder page logic. Vanilla JS, talks to the JSON API in kroger_reorder/main.py.
 const $ = (id) => document.getElementById(id);
 const IS_HOST = ['localhost', '127.0.0.1'].includes(location.hostname);
 const STALE_MS = 24 * 60 * 60 * 1000;

@@ -1,4 +1,4 @@
-# app/vision.py
+# kroger_reorder/vision.py
 """Turn photos of a fridge, pantry or cupboard into grocery suggestions via headless Claude Code.
 
 Jake chose to run this on his Claude subscription, so instead of the Anthropic API the server shells out

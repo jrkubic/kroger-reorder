@@ -4,7 +4,7 @@
 #   .\scripts\install-startup.ps1 -Remove    # take it out again
 #
 # It drops a shortcut in your Startup folder that runs the venv's pythonw.exe (no console window)
-# with `-m app --no-browser`. Output goes to %LOCALAPPDATA%\kroger-reorder\server.log.
+# with `-m kroger_reorder --no-browser`. Output goes to %LOCALAPPDATA%\kroger-reorder\server.log.
 # You can also toggle it under Settings > Apps > Startup, or Task Manager > Startup apps.
 param([switch]$Remove)
 
@@ -25,7 +25,7 @@ if (-not (Test-Path (Join-Path $root '.env'))) { throw "Missing .env in $root. C
 $shell = New-Object -ComObject WScript.Shell
 $sc = $shell.CreateShortcut($link)
 $sc.TargetPath = $pythonw
-$sc.Arguments = '-m app --no-browser'
+$sc.Arguments = '-m kroger_reorder --no-browser'
 $sc.WorkingDirectory = $root
 $sc.WindowStyle = 7   # minimized; pythonw has no window anyway
 $sc.Description = 'Kroger Reorder local server'
