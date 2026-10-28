@@ -1,0 +1,10 @@
+# docker compose up -d      (reads .env for credentials; lists and tokens persist in ./data)
+services:
+  kroger-reorder:
+    build: .
+    env_file: .env
+    ports:
+      - "${PORT:-8000}:${PORT:-8000}"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
