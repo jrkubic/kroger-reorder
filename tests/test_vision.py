@@ -1,10 +1,15 @@
 # tests/test_vision.py
+import base64
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import anthropic
+import httpx2
 import pytest
 
-from kroger_reorder.vision import RunResult, VisionError, analyze, build_prompt, parse_suggestions
+from kroger_reorder.vision import (SYSTEM, RunResult, VisionError, analyze, build_prompt, choose_backend,
+                                   context_text, parse_suggestions)
 
 PHOTOS = [Path("C:/tmp/a.jpg"), Path("C:/tmp/b.jpg")]
 GOOD = [{"name": "whole milk", "quantity": 1, "kind": "seen", "reason": "Half a gallon left"},
@@ -121,3 +126,98 @@ def test_analyze_timeout_bubbles_as_504():
     with pytest.raises(VisionError) as exc:
         analyze(PHOTOS, "", "", model="m", timeout=5, runner=slow, which=which_ok)
     assert exc.value.status == 504
+
+
+# -- API backend ----------------------------------------------------------------------
+
+def api_message(text, stop_reason="end_turn"):
+    return SimpleNamespace(stop_reason=stop_reason, content=[SimpleNamespace(type="text", text=text)])
+
+
+def api_error(cls, status, message="boom"):
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    return cls(message, response=httpx2.Response(status, request=request), body=None)
+
+
+def fake_client(result=None, error=None):
+    """A stand-in for anthropic.Anthropic: records constructor kwargs and messages.create kwargs."""
+    created, calls = [], []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        if error:
+            raise error
+        return result
+
+    def make_client(**kwargs):
+        created.append(kwargs)
+        return SimpleNamespace(messages=SimpleNamespace(create=create))
+    make_client.created = created
+    make_client.calls = calls
+    return make_client
+
+
+@pytest.fixture
+def jpg_photos(tmp_path):
+    a, b = tmp_path / "photo-1.jpg", tmp_path / "photo-2.png"
+    a.write_bytes(b"\xff\xd8\xff jpeg bytes")
+    b.write_bytes(b"\x89PNG png bytes")
+    return [a, b]
+
+
+def test_context_text_has_note_and_history_with_placeholders():
+    assert "User's note: out of eggs" in context_text("out of eggs", "- Milk: 3x")
+    assert "- Milk: 3x" in context_text("out of eggs", "- Milk: 3x")
+    text = context_text("  ", "")
+    assert "User's note: (none)" in text and "(no orders yet)" in text
+
+
+def test_choose_backend_prefers_api_key_then_cli():
+    assert choose_backend(api_key="sk-x", which=lambda n: None) == "api"
+    assert choose_backend(api_key=None, which=which_ok) == "cli"
+    assert choose_backend(api_key=None, which=lambda n: None) is None
+
+
+def test_analyze_api_sends_inline_images_and_parses_text(jpg_photos):
+    make = fake_client(result=api_message(json.dumps(GOOD)))
+    out = analyze(jpg_photos, "out of eggs", "- Milk: 3x", model="claude-opus-5-5", timeout=42,
+                  api_key="sk-test", make_client=make, which=lambda n: None, runner=fake_runner())
+    assert [s.name for s in out] == ["whole milk", "large eggs"]
+    assert make.created == [{"api_key": "sk-test", "timeout": 42, "max_retries": 1}]
+    (call,) = make.calls
+    assert call["model"] == "claude-opus-5-5" and call["max_tokens"] == 8192 and call["system"] == SYSTEM
+    (msg,) = call["messages"]
+    assert msg["role"] == "user"
+    images, (text,) = msg["content"][:2], msg["content"][2:]
+    assert [i["source"]["media_type"] for i in images] == ["image/jpeg", "image/png"]
+    assert images[0]["source"]["data"] == base64.standard_b64encode(jpg_photos[0].read_bytes()).decode()
+    assert text["type"] == "text" and "out of eggs" in text["text"] and "- Milk: 3x" in text["text"]
+    assert "Read tool" not in text["text"]
+
+
+@pytest.mark.parametrize("error, status, needle", [
+    (api_error(anthropic.AuthenticationError, 401), 502, "ANTHROPIC_API_KEY"),
+    (api_error(anthropic.PermissionDeniedError, 403), 502, "ANTHROPIC_API_KEY"),
+    (api_error(anthropic.RateLimitError, 429), 503, "rate limit"),
+    (api_error(anthropic.APIStatusError, 500, "overloaded"), 502, "overloaded"),
+    (anthropic.APITimeoutError(request=httpx2.Request("POST", "https://x")), 504, "longer than 42"),
+    (anthropic.APIConnectionError(request=httpx2.Request("POST", "https://x")), 502, "reach Anthropic"),
+])
+def test_analyze_api_maps_sdk_errors(jpg_photos, error, status, needle):
+    with pytest.raises(VisionError) as exc:
+        analyze(jpg_photos, "", "", model="m", timeout=42, api_key="sk", make_client=fake_client(error=error))
+    assert exc.value.status == status and needle in exc.value.message
+
+
+def test_analyze_api_refusal_is_502(jpg_photos):
+    make = fake_client(result=api_message("", stop_reason="refusal"))
+    with pytest.raises(VisionError) as exc:
+        analyze(jpg_photos, "", "", model="m", timeout=5, api_key="sk", make_client=make)
+    assert exc.value.status == 502 and "declined" in exc.value.message
+
+
+def test_analyze_without_key_or_cli_explains_both_options():
+    with pytest.raises(VisionError) as exc:
+        analyze(PHOTOS, "", "", model="m", timeout=5, runner=fake_runner(), which=lambda n: None)
+    assert exc.value.status == 503
+    assert "ANTHROPIC_API_KEY" in exc.value.message and "Claude Code" in exc.value.message

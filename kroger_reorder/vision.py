@@ -1,12 +1,18 @@
 # kroger_reorder/vision.py
-"""Turn photos of a fridge, pantry or cupboard into grocery suggestions via headless Claude Code.
+"""Turn photos of a fridge, pantry or cupboard into grocery suggestions.
 
-Jake chose to run this on his Claude subscription, so instead of the Anthropic API the server shells out
-to the installed `claude` CLI (`claude -p … --output-format json`) and lets it read the photos with its
-Read tool. The subprocess runner is injectable so tests never start Claude Code.
+Two backends, chosen by configuration:
+
+- **API** (`ANTHROPIC_API_KEY` set): the Anthropic SDK, photos sent inline as base64 image blocks.
+  Pay-per-use; works anywhere, including Docker.
+- **CLI** (no key): the installed `claude` CLI run headlessly (`claude -p … --output-format json`),
+  which reads the photos with its Read tool. Uses the host's Claude subscription.
+
+Both runners are injectable so tests never call the network or start Claude Code.
 """
 from __future__ import annotations
 
+import base64
 import json
 import re
 import shutil
@@ -15,9 +21,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import anthropic
+
 MAX_ITEMS = 40
 MAX_QUANTITY = 10
 KINDS = ("seen", "suggested")
+API_MAX_TOKENS = 8192
+API_MAX_RETRIES = 1
+MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
 SYSTEM = """You are helping build a grocery shopping list from photos of a household's fridge, freezer, pantry or cupboard, together with the user's note and their purchase history.
 
@@ -30,6 +41,9 @@ Include:
 - anything the note asks for.
 
 Prefer plain names like "whole milk" or "large eggs" over brands unless a brand is clearly visible. Skip non-food household items unless visible or asked for. At most 40 items. Do not repeat items."""
+
+NO_BACKEND = ("Photos can't be analyzed: set ANTHROPIC_API_KEY in .env, or install Claude Code on the "
+              "computer running the app.")
 
 
 class VisionError(Exception):
@@ -57,31 +71,28 @@ class RunResult:
 
 
 Runner = Callable[[list[str], str, float], RunResult]
+Which = Callable[[str], str | None]
 
 
-def run_cli(args: list[str], stdin_text: str, timeout: float) -> RunResult:
-    """Run the CLI with the prompt on stdin. On Windows `claude` is a .CMD shim, and cmd.exe cuts a
-    multi-line argument at the first newline, so the prompt must never travel as an argument."""
-    try:
-        proc = subprocess.run(args, input=stdin_text, capture_output=True, text=True, encoding="utf-8",
-                              timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        raise VisionError(504, f"Claude took longer than {int(timeout)} seconds; try fewer or smaller photos.") from exc
-    return RunResult(proc.returncode, proc.stdout or "", proc.stderr or "")
+def choose_backend(*, api_key: str | None, which: Which = shutil.which) -> str | None:
+    """'api' when a key is configured, 'cli' when `claude` is on PATH, else None."""
+    if api_key:
+        return "api"
+    if which("claude"):
+        return "cli"
+    return None
 
 
-def build_prompt(photos: list[Path], note: str, profile: str) -> str:
-    lines = ["Use the Read tool to look at each of these photos:"]
-    lines += [f"- {p}" for p in photos]
-    lines.append("")
-    lines.append("User's note: " + (note.strip() or "(none)"))
-    lines.append("")
-    lines.append("Purchase history (most bought first):")
-    lines.append(profile.strip() or "(no orders yet)")
-    lines.append("")
-    lines.append(SYSTEM)
-    return "\n".join(lines)
+def context_text(note: str, profile: str) -> str:
+    return "\n".join([
+        "User's note: " + (note.strip() or "(none)"),
+        "",
+        "Purchase history (most bought first):",
+        profile.strip() or "(no orders yet)",
+    ])
 
+
+# -- shared parsing ---------------------------------------------------------------------
 
 def _extract_json_array(text: str) -> list:
     text = text.strip()
@@ -128,11 +139,68 @@ def parse_suggestions(result_text: str) -> list[Suggestion]:
     return out
 
 
-def analyze(photos: list[Path], note: str, profile: str, *, model: str, timeout: float,
-            runner: Runner = run_cli, which: Callable[[str], str | None] = shutil.which) -> list[Suggestion]:
+# -- API backend ------------------------------------------------------------------------
+
+def _image_block(path: Path) -> dict:
+    media_type = MEDIA_TYPES.get(path.suffix.lower())
+    if not media_type:
+        raise VisionError(415, f"Unsupported photo type {path.suffix}.")
+    data = base64.standard_b64encode(path.read_bytes()).decode("ascii")
+    return {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}}
+
+
+def analyze_api(photos: list[Path], note: str, profile: str, *, model: str, timeout: float, api_key: str,
+                make_client: Callable[..., object] = anthropic.Anthropic) -> list[Suggestion]:
+    client = make_client(api_key=api_key, timeout=timeout, max_retries=API_MAX_RETRIES)
+    content = [_image_block(p) for p in photos] + [{"type": "text", "text": context_text(note, profile)}]
+    try:
+        message = client.messages.create(
+            model=model,
+            max_tokens=API_MAX_TOKENS,
+            system=SYSTEM,
+            messages=[{"role": "user", "content": content}],
+        )
+    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
+        raise VisionError(502, "Anthropic rejected ANTHROPIC_API_KEY; check the key in .env.") from exc
+    except anthropic.RateLimitError as exc:
+        raise VisionError(503, "Anthropic rate limit reached; wait a minute and try again.") from exc
+    except anthropic.APITimeoutError as exc:
+        raise VisionError(504, f"Claude took longer than {int(timeout)} seconds; try fewer or smaller photos.") from exc
+    except anthropic.APIConnectionError as exc:
+        raise VisionError(502, "Couldn't reach Anthropic; check the network on the computer running the app.") from exc
+    except anthropic.APIStatusError as exc:
+        raise VisionError(502, f"Anthropic error: {exc.message}") from exc
+    if getattr(message, "stop_reason", None) == "refusal":
+        raise VisionError(502, "Claude declined to analyze these photos; try different ones.")
+    text = "".join(block.text for block in message.content if getattr(block, "type", "") == "text")
+    return parse_suggestions(text)
+
+
+# -- CLI backend ------------------------------------------------------------------------
+
+def run_cli(args: list[str], stdin_text: str, timeout: float) -> RunResult:
+    """Run the CLI with the prompt on stdin. On Windows `claude` is a .CMD shim, and cmd.exe cuts a
+    multi-line argument at the first newline, so the prompt must never travel as an argument."""
+    try:
+        proc = subprocess.run(args, input=stdin_text, capture_output=True, text=True, encoding="utf-8",
+                              timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise VisionError(504, f"Claude took longer than {int(timeout)} seconds; try fewer or smaller photos.") from exc
+    return RunResult(proc.returncode, proc.stdout or "", proc.stderr or "")
+
+
+def build_prompt(photos: list[Path], note: str, profile: str) -> str:
+    lines = ["Use the Read tool to look at each of these photos:"]
+    lines += [f"- {p}" for p in photos]
+    lines += ["", context_text(note, profile), "", SYSTEM]
+    return "\n".join(lines)
+
+
+def analyze_cli(photos: list[Path], note: str, profile: str, *, model: str, timeout: float,
+                runner: Runner = run_cli, which: Which = shutil.which) -> list[Suggestion]:
     exe = which("claude")
     if not exe:
-        raise VisionError(503, "Claude Code isn't installed on the computer running the app, so photos can't be analyzed.")
+        raise VisionError(503, NO_BACKEND)
     args = [exe, "-p", "--output-format", "json", "--allowedTools", "Read", "--max-turns", "6"]
     if model:
         args += ["--model", model]
@@ -149,3 +217,15 @@ def analyze(photos: list[Path], note: str, profile: str, *, model: str, timeout:
     if envelope.get("is_error") or envelope.get("subtype", "success") != "success":
         raise VisionError(502, f"Claude Code reported an error: {envelope.get('result') or envelope.get('subtype')}")
     return parse_suggestions(str(envelope.get("result") or ""))
+
+
+# -- entry point ------------------------------------------------------------------------
+
+def analyze(photos: list[Path], note: str, profile: str, *, model: str, timeout: float,
+            api_key: str | None = None, make_client: Callable[..., object] = anthropic.Anthropic,
+            runner: Runner = run_cli, which: Which = shutil.which) -> list[Suggestion]:
+    """API backend when `api_key` is given, otherwise the Claude Code CLI."""
+    if api_key:
+        return analyze_api(photos, note, profile, model=model, timeout=timeout, api_key=api_key,
+                           make_client=make_client)
+    return analyze_cli(photos, note, profile, model=model, timeout=timeout, runner=runner, which=which)
