@@ -147,3 +147,6 @@ purchase history text already produced for photos.
 - Sites that render ingredients only with JavaScript: the text fallback sees nothing; the error
   points the user at Import.
 - A no-Claude fallback that imports raw ingredient lines. Photos require a backend; recipes do too.
+- Blocking fetches of private or local addresses. The operator supplies the URL on a single-user LAN
+  app; a hostile link could make the server GET its own `/callback`, which is why the design keeps
+  the app off the public internet (see README security note).

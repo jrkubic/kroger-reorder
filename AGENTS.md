@@ -32,7 +32,8 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
 | `kroger_reorder/kroger.py` | Kroger API client: OAuth, locations, products, cart |
 | `kroger_reorder/storage.py` | JSON persistence; `Storage(data_dir)` is the only way in |
 | `kroger_reorder/settings.py` | `.env` / environment parsing; every setting has a default here |
-| `kroger_reorder/vision.py` | Photo suggestions: Anthropic SDK backend or Claude Code CLI backend |
+| `kroger_reorder/vision.py` | Shared Claude call (`complete()`: Anthropic SDK or Claude Code CLI) and photo suggestions |
+| `kroger_reorder/recipe.py` | Recipe URL suggestions: fetch, JSON-LD extraction, prompt; shares `vision.complete()` |
 | `kroger_reorder/importer.py`, `orders.py`, `usage.py` | Import parsing, order snapshots, usage profile |
 | `kroger_reorder/static/` | `index.html` (page + styles) and `app.js` (all page logic) |
 | `kroger_reorder/__main__.py` | Entry point, startup banner, Windows headless logging |
@@ -80,6 +81,7 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
 - `vision.py` must never call the network in tests: pass `make_client=` (API) or `runner=`/`which=`
   (CLI) fakes. The real `anthropic.Anthropic` is only reached when `api_key` is set and no fake is
   given.
+- `recipe.fetch_page()` must never hit the network in tests: pass `transport=` an `httpx.MockTransport`.
 - `data/` under the checkout is the maintainer's live grocery data. Tests use `tmp_path`; manual
   Docker checks mount a scratch directory, never `./data`.
 - `.env` holds real credentials. Never print it, never commit it, never copy it into an image.
@@ -91,3 +93,5 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
   postponed.
 - Multi-user auth, TLS, PyPI publishing, a container registry image, a non-root Docker user.
 - Hiding the Photo button when no backend is configured: the dialog explains instead.
+- Importing raw ingredient lines without a Claude backend; scaling servings automatically (the note
+  covers it).

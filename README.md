@@ -63,6 +63,7 @@ Or with Docker: `docker compose up -d`. Full details, including registering the 
 - **Import.** Plain text, Markdown checklists, CSV, TSV from a spreadsheet, JSON, or the app's own export. Reviewed in a table before adding.
 - **Export.** Download any list as CSV. Re-importing it recreates the list exactly, on this or another install.
 - **Photo suggestions.** Photograph your fridge, pantry or cupboard from any device on the wifi, add a note, and Claude proposes a list: what it sees, what looks low or missing, and what your note asks for. Every line is reviewed against the store catalog before it is added. Works through your own Anthropic API key, or through Claude Code installed on the host.
+- **Recipe suggestions.** Paste the link to a recipe and Claude turns its ingredient list into store purchases, flagging what the chosen list already has and the pantry staples a kitchen keeps (both preset to Skip). Same backends and review step as photos.
 - **Usage profile.** Derived from order history: how often you buy each item, the usual quantity, and when it is due again. Shown on the Orders tab and used to make photo suggestions smarter over time.
 - **Phone access.** The server binds to your LAN. Sign in once on the PC and every device shares it.
 - **Start with Windows.** One script installs a hidden startup entry so the app is always available. Docker users get the same with `restart: unless-stopped`.
@@ -80,11 +81,11 @@ Or with Docker: `docker compose up -d`. Full details, including registering the 
 | Configuration | [python-dotenv](https://github.com/theskumar/python-dotenv) | Loads credentials from `.env` |
 | Front end | HTML5, CSS, vanilla JavaScript (ES2020) | One page, no build step, no framework |
 | Persistence | JSON files | One file per list, plus config, tokens, and orders |
-| Testing | [pytest](https://docs.pytest.org/) with Starlette `TestClient` | 207 tests, no network access |
+| Testing | [pytest](https://docs.pytest.org/) with Starlette `TestClient` | 264 tests, no network access |
 | Packaging | `pyproject.toml` with setuptools | `pip install -e .` and a `kroger-reorder` console script |
 | Automation | PowerShell 5.1 | Windows startup installer |
 | External API | [Kroger Public API](https://developer.kroger.com/) | Locations, Products, Cart, OAuth 2.0 |
-| Vision | [`anthropic`](https://github.com/anthropics/anthropic-sdk-python) SDK, or [Claude Code](https://code.claude.com/docs) run headlessly (`claude -p`) | Photo analysis for suggested lists: API key, or the host's Claude subscription |
+| Claude | [`anthropic`](https://github.com/anthropics/anthropic-sdk-python) SDK, or [Claude Code](https://code.claude.com/docs) run headlessly (`claude -p`) | Photo analysis and recipe suggestions: API key, or the host's Claude subscription |
 | Containers | Docker, docker compose | Optional self-hosting path |
 | CI | GitHub Actions | pytest on Windows, Ubuntu, macOS × Python 3.12, 3.13; Docker build |
 
@@ -102,7 +103,8 @@ kroger-reorder/
 │   ├── storage.py         JSON persistence: lists, config, tokens, order history
 │   ├── orders.py          Builds an order snapshot after a successful send
 │   ├── importer.py        Parses text, Markdown, CSV, TSV, and JSON into lines
-│   ├── vision.py          Photo suggestions: Anthropic API or headless Claude Code
+│   ├── vision.py          Claude backends (Anthropic API or headless Claude Code) and photo suggestions
+│   ├── recipe.py          Recipe URL suggestions: fetch, JSON-LD ingredients, Claude normalization
 │   ├── usage.py           Usage profile derived from order history
 │   ├── settings.py        Reads configuration from .env
 │   └── static/
@@ -174,7 +176,7 @@ docker compose up -d
 docker compose logs -f     # Ctrl+C to stop following; the container keeps running
 ```
 
-Lists, tokens, and order history persist in `./data`. Photo suggestions inside Docker need `ANTHROPIC_API_KEY` in `.env` (there is no Claude Code in the image).
+Lists, tokens, and order history persist in `./data`. Photo and recipe suggestions inside Docker need `ANTHROPIC_API_KEY` in `.env` (there is no Claude Code in the image).
 
 Three Docker notes. The compose file pins the data folder to the `./data` bind mount, so leave `KROGER_REORDER_DATA` unset in `.env` when using Docker. On Linux hosts the container runs as root, so files under `./data` are root-owned; use `sudo` to edit them by hand, or `chown` the folder once. The startup banner's "On your wifi" line shows the container's internal address, which is not reachable from your network; set `PUBLIC_URL` to the address you actually use and ignore that line.
 
@@ -186,16 +188,16 @@ Your browser opens http://localhost:8000 (Docker: open it yourself). Enter your 
 
 The console also prints a wifi address such as `http://192.168.1.20:8000`. Open that on your phone or any device on the same network. Sign in from the PC (or from the public URL, see below); every device shares the sign-in.
 
-### 5. Optional: photo suggestions
+### 5. Optional: photo and recipe suggestions
 
-The **Photo** button turns pictures of your fridge or pantry into a suggested list. Pick one of two backends:
+The **Photo** button turns pictures of your fridge or pantry into a suggested list, and the **Recipe** button turns a recipe link into the groceries it needs. Both features share this setup. Pick one of two backends:
 
 | Backend | Set up | Cost |
 |---|---|---|
 | Anthropic API | Create a key at https://console.anthropic.com and put it in `.env` as `ANTHROPIC_API_KEY`. Works on every platform including Docker. | Pay per use. A four-photo request on the default model is a few cents. |
 | Claude Code | Install [Claude Code](https://code.claude.com/docs) on the computer running the app, run `claude` once to sign in, and leave `ANTHROPIC_API_KEY` unset. | Uses your Claude subscription. Not available in Docker. |
 
-The photo dialog says which backend is active. `PHOTO_MODEL` in `.env` applies to both; the default is `claude-opus-5-5`.
+The photo and recipe dialogs say which backend is active. `PHOTO_MODEL` in `.env` applies to both backends and both features; the default is `claude-opus-5-5`.
 
 ## Configuration
 
@@ -207,11 +209,11 @@ All settings live in `.env` (or the process environment, which wins). Only the f
 | `PORT` | `8000` | Port to listen on. The redirect URL on the Kroger app must use the same port. |
 | `PUBLIC_URL` | `http://localhost:<PORT>` | Origin browsers use to reach the app when it runs on another machine. The OAuth redirect becomes `<PUBLIC_URL>/callback`. |
 | `KROGER_REORDER_DATA` | `./data` | Folder for lists, config, tokens, and order history, relative to the directory you start the server from. The compose file pins it to the `./data` volume. |
-| `ANTHROPIC_API_KEY` | unset | Enables the API photo backend. Unset means Claude Code. |
-| `PHOTO_MODEL` | `claude-opus-5-5` | Model used for photo suggestions by either backend. |
-| `PHOTO_TIMEOUT` | `90` | Seconds to wait for a photo analysis. |
+| `ANTHROPIC_API_KEY` | unset | Photo and recipe suggestions through the Anthropic API. Unset means Claude Code. |
+| `PHOTO_MODEL` | `claude-opus-5-5` | Model used for photo and recipe suggestions by either backend. |
+| `PHOTO_TIMEOUT` | `90` | Seconds to wait for a photo analysis or recipe suggestion. |
 
-The server prints the data folder and the active photo backend when it starts, so you can confirm what it picked up.
+The server prints the data folder and the active Claude backend (the "Claude:" line) when it starts, so you can confirm what it picked up.
 
 ## Running on startup (Windows)
 
@@ -299,7 +301,17 @@ Click **Photo**, choose which list the items should go to (or **New list…**), 
 
 The photos are shrunk in the browser, sent to the computer running the app, and handed to the photo backend there (the Anthropic API or a local Claude Code install) together with your note and your usage profile. After 10 to 30 seconds the import review table opens with every suggestion tagged **seen** (visible in a photo) or **suggested** (looks empty, low, absent, overdue by your history, or asked for in the note), each with a one-line reason and a catalog match you can change or skip. **Add to list** works as for any import. Photos are deleted as soon as the analysis finishes and are never stored.
 
-Requirements: an `ANTHROPIC_API_KEY` in `.env`, or [Claude Code](https://code.claude.com/docs) installed and signed in on the computer running the app; see [Optional: photo suggestions](#5-optional-photo-suggestions). `PHOTO_MODEL` and `PHOTO_TIMEOUT` in `.env` change the model (default `claude-opus-5-5`) and the time limit (default 90 seconds).
+Requirements: an `ANTHROPIC_API_KEY` in `.env`, or [Claude Code](https://code.claude.com/docs) installed and signed in on the computer running the app; see [Optional: photo and recipe suggestions](#5-optional-photo-and-recipe-suggestions). `PHOTO_MODEL` and `PHOTO_TIMEOUT` in `.env` change the model (default `claude-opus-5-5`) and the time limit (default 90 seconds). The same requirements and settings apply to recipe suggestions below.
+
+### Recipe suggestions
+
+Click **Recipe**, choose which list the groceries should go to (or **New list…**), paste the recipe's web address, add a note if you like ("double it", "skipping the sauce", "we already have chicken"), and click **Suggest groceries**.
+
+The computer running the app fetches the page, reads the recipe's ingredient list (most recipe sites publish one in a machine-readable form; otherwise the page text is used), and hands it to Claude together with the items already on that list and your usage profile. After 10 to 30 seconds the import review table opens with every ingredient tagged **needed**, **staple** (salt, oil, flour, spices and similar; Skip is preselected), or **on list** (the list already has it, with what it has in the reason; Skip is preselected). Change any dropdown to add a staple you are out of, then **Add to list** as for any import. Nothing about the recipe is stored.
+
+Pages that only show ingredients after running scripts, and sites that block automated visitors, cannot be read; copy the ingredients from the page into **Import** instead.
+
+Requirements are the same as for [Photo suggestions](#photo-suggestions): an API key or Claude Code, with `PHOTO_MODEL` and `PHOTO_TIMEOUT` applying to both.
 
 ### Usage profile
 
@@ -329,7 +341,7 @@ Everything lives in `data/`, which is gitignored:
 
 An unreadable or malformed file is shown as a warning and moved aside as `<file>.corrupt-<timestamp>` before the app writes to it again. Nothing is ever deleted automatically.
 
-Credentials stay in `.env`, also gitignored. Nothing leaves your machine except calls to `api.kroger.com` and, for photo suggestions, the photos and note sent to Anthropic. The page has no login; it trusts your home network, so do not expose port 8000 to the internet.
+Credentials stay in `.env`, also gitignored. Nothing leaves your machine except calls to `api.kroger.com`; for photo suggestions, the photos and note sent to Anthropic or Claude Code; and for recipe suggestions, the fetch of the recipe page by the computer running the app, plus the ingredient lines, the chosen list's item names, and your note sent to Anthropic or Claude Code. The page has no login; it trusts your home network, so do not expose port 8000 to the internet.
 
 ## HTTP API
 
@@ -371,11 +383,12 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 | `POST` | `/api/import/resolve` | Catalog candidates for each name |
 | `POST` | `/api/lists/{slug}/import` | Add the chosen picks to a list |
 
-### Photo suggestions and usage
+### Photo and recipe suggestions, usage
 
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api/photo/suggest` | Base64 photos plus a note; returns suggested lines for the import review |
+| `POST` | `/api/recipe/suggest` | A recipe URL, the target list slug, and a note; returns the recipe title and suggested lines for the import review |
 | `GET` | `/api/usage` | Usage profile derived from order history |
 
 ### Orders
@@ -429,6 +442,7 @@ Run once after setup, or after changes that touch the Kroger client:
 6. Import a five-line text file, confirm the matches, and see the items appear.
 7. Export the list, create a second list, import the file into it, and compare.
 8. Open the **Orders** tab, expand the order from step 3, and send it again.
+9. **Recipe** → paste a link → rows tagged needed / staple / on list → **Add to list**.
 
 ## Design documents
 
@@ -464,7 +478,7 @@ These come from Kroger's public API, not from the app:
 | Cannot sign in from a phone | Expected. Sign in once from the PC, or from the address in `PUBLIC_URL`. |
 | Cannot delete a list | The last list cannot be deleted. Create another first. |
 | Buttons do nothing after an update | Reload the page. Versions before v3 could run a stale cached script; this is fixed. |
-| `Photos can't be analyzed: set ANTHROPIC_API_KEY...` after **Suggest a list** | Neither backend is configured. Add `ANTHROPIC_API_KEY` to `.env`, or install Claude Code on the computer running the app and sign in, then restart the app. |
+| `Photos can't be analyzed: set ANTHROPIC_API_KEY...` after **Suggest a list** or **Suggest groceries** | Neither backend is configured. Add `ANTHROPIC_API_KEY` to `.env`, or install Claude Code on the computer running the app and sign in, then restart the app. |
 | `Anthropic rejected ANTHROPIC_API_KEY` | The key is wrong or revoked. Check it at https://console.anthropic.com. |
 | `Anthropic error: ...` | Anthropic's own message, for example a credit balance that is too low or an image that is too large. |
 | `Anthropic rate limit reached` | Wait a minute. Persistent? Your Anthropic plan's limits are lower than four photos per request allows; try fewer photos. |
@@ -472,6 +486,12 @@ These come from Kroger's public API, not from the app:
 | Sign-in button missing on a NAS or server install | Open the app at exactly the address in `PUBLIC_URL`, or use the SSH tunnel in [Running on another machine](#running-on-another-machine). |
 | Docker: `Kroger sign-in failed` with a redirect mismatch | The redirect URL on the Kroger app must be `<PUBLIC_URL>/callback`; set `PUBLIC_URL` in `.env` to the address you open in the browser. |
 | Photo analysis times out | Use fewer or clearer photos, or raise `PHOTO_TIMEOUT` in `.env`. |
+| `Enter a full web address starting with http:// or https://.` | Paste the whole link from the browser's address bar. |
+| `That site refused the request (HTTP 403)...` | The site blocks automated visitors. Copy the ingredients from the page into **Import**. |
+| `Couldn't fetch that page: ...` | The computer running the app could not reach the site; check the address and its network. |
+| `That address isn't a web page.` | The link points at a PDF, image or file. Use the recipe page's own link. |
+| `Couldn't find a recipe on that page.` | Search results, category pages and pages that draw ingredients with scripts have nothing to read. Open the recipe itself, or use **Import**. |
+| `Claude couldn't find any ingredients on that page.` | The page text had no recognizable recipe. Use **Import** with the ingredients copied from the page. |
 
 ## Resources
 
@@ -496,6 +516,7 @@ These come from Kroger's public API, not from the app:
 | 2026-10-26 | v3 | Order history with reorder, Orders tab, CSV export and exact re-import, list header buttons, Windows startup installer, cache-safe script loading |
 | 2026-10-26 | v4 | Photo suggestions through headless Claude Code, usage profile from order history |
 | 2026-10-28 | v5 | Package renamed to `kroger_reorder`, Anthropic API photo backend, `PUBLIC_URL` and `KROGER_REORDER_DATA`, Docker, CI on three OSes, lock file, clone-first setup docs |
+| 2026-10-29 | v6 | Recipe URL suggestions: paste a recipe link, Claude proposes the groceries, on-list and staple rows start on Skip |
 
 ## License
 
