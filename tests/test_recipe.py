@@ -135,8 +135,15 @@ def test_extract_finds_recipe_inside_graph_with_type_list_after_a_broken_block()
 
 
 def test_extract_skips_recipe_objects_without_ingredients():
-    html = ld({"@type": "Recipe", "name": "Empty"}) + ld({"@type": "Recipe", "name": "Full", "recipeIngredient": ["salt"]})
-    assert extract(html).title == "Full"
+    html = ld({"@type": "Recipe", "name": "Empty"}) + ld({"@type": "recipe", "name": "Full",
+                                                          "recipeIngredient": [{"name": "2 eggs"}, "salt"]})
+    out = extract(html)
+    assert out.title == "Full" and out.ingredients == ["2 eggs", "salt"]
+
+
+def test_extract_uses_page_title_when_recipe_has_no_name():
+    html = "<title>Grandma's Soup | Site</title>" + ld({"@type": "Recipe", "recipeIngredient": ["salt"]})
+    assert extract(html).title == "Grandma's Soup | Site"
 
 
 def test_extract_falls_back_to_visible_text_without_scripts_nav_or_tags():
@@ -158,4 +165,48 @@ def test_extract_with_too_little_text_is_422():
 
 def test_extract_truncates_long_text():
     html = "<html><body>" + "<p>word</p>" * 10000 + "</body></html>"
-    assert len(extract(html).text) <= 20_000
+    assert len(extract(html).text) == 20_000
+
+
+def test_extract_title_is_the_first_title_outside_skipped_subtrees():
+    body = "<p>more text</p>" * 30
+    html = f"<html><head><title>Real Title</title></head><body><svg><title>Icon Name</title></svg>{body}</body></html>"
+    assert extract(html).title == "Real Title"
+    html = f"<html><body><svg><title>Icon Name</title></svg>{body}</body></html>"
+    assert extract(html).title == ""
+
+
+def test_extract_recovers_from_unclosed_nav_inside_header():
+    body = "<p>more text</p>" * 30
+    out = extract(f"<html><body><header><nav>Menu</header>{body}</body></html>")
+    assert "more text" in out.text and "Menu" not in out.text
+
+
+def test_extract_tolerates_cdata_wrapped_json_ld():
+    html = '<script type="application/ld+json">//<![CDATA[\n' + json.dumps(RECIPE) + '\n//]]></script>'
+    assert extract(html).title == "Chicken Tikka Masala"
+
+
+def test_extract_accepts_script_type_with_charset_parameter():
+    html = '<script type="application/ld+json; charset=utf-8">' + json.dumps(RECIPE) + '</script>'
+    assert extract(html).title == "Chicken Tikka Masala"
+
+
+def test_extract_accepts_iri_type():
+    html = ld({"@type": "https://schema.org/Recipe", "name": "Iri", "recipeIngredient": ["salt"]})
+    assert extract(html).title == "Iri"
+
+
+def test_extract_skips_a_block_nested_too_deep_to_walk():
+    html = '<script type="application/ld+json">' + "[" * 3000 + "]" * 3000 + "</script>" + ld(RECIPE)
+    assert extract(html).title == "Chicken Tikka Masala"
+
+
+def test_extract_unescapes_html_entities_in_ingredients():
+    html = ld({"@type": "Recipe", "name": "X", "recipeIngredient": ["1 cup flour &amp; sugar"]})
+    assert extract(html).ingredients == ["1 cup flour & sugar"]
+
+
+def test_extract_reads_quantitative_value_yield():
+    html = ld({**RECIPE, "recipeYield": {"@type": "QuantitativeValue", "value": 4}})
+    assert extract(html).yield_ == "4"

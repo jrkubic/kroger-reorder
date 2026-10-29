@@ -12,6 +12,7 @@ import json
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
+from html import unescape
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlsplit
@@ -24,6 +25,8 @@ MAX_BYTES = 2 * 1024 * 1024
 TIMEOUT = 15.0
 MAX_TEXT = 20_000   # characters of page text handed to Claude when there is no JSON-LD recipe
 MIN_TEXT = 200      # below this the page is a search page, a login wall, or an error
+# Some sites wrap JSON-LD in an HTML comment or a CDATA section; strip it before parsing.
+LD_WRAPPER = re.compile(r"^\s*(<!--|//\s*<!\[CDATA\[|<!\[CDATA\[)|(-->|//\s*\]\]>|\]\]>)\s*$")
 HTML_TYPES = ("text/html", "application/xhtml+xml")
 HEADERS = {
     # Many recipe sites answer 403 to anything that doesn't look like a browser.
@@ -112,22 +115,24 @@ class _Collector(HTMLParser):
         self.text_parts: list[str] = []
         self._ld: list[str] | None = None
         self._in_title = False
-        self._skip = 0
+        self._skip: list[str] = []  # open tags from SKIP, outermost first
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag == "script" and (dict(attrs).get("type") or "").strip().lower() == "application/ld+json":
+        if tag == "script" and (dict(attrs).get("type") or "").split(";")[0].strip().lower() == "application/ld+json":
             self._ld = []
         if tag in self.SKIP:
-            self._skip += 1
-        if tag == "title":
-            self._in_title = True
+            self._skip.append(tag)
+        if tag == "title" and not self._skip and not self.title_parts:
+            self._in_title = True  # only the first real <title>; an <svg><title> is an icon's label
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "script" and self._ld is not None:
             self.ld_blocks.append("".join(self._ld))
             self._ld = None
-        if tag in self.SKIP and self._skip:
-            self._skip -= 1
+        if tag in self._skip:
+            # Close back to the last open tag of this name, so an unclosed <nav> inside a closed
+            # <header> (which browsers close implicitly) doesn't swallow the rest of the page.
+            del self._skip[len(self._skip) - 1 - self._skip[::-1].index(tag):]
         if tag == "title":
             self._in_title = False
 
@@ -148,7 +153,7 @@ def _recipes(node: Any) -> Iterator[dict]:
     elif isinstance(node, dict):
         types = node.get("@type")
         types = types if isinstance(types, list) else [types]
-        if any(str(t).lower() == "recipe" for t in types if t):
+        if any(re.split(r"[/:#]", str(t))[-1].lower() == "recipe" for t in types if t):  # also schema:Recipe, IRIs
             yield node
         for child in node.values():
             if isinstance(child, (list, dict)):
@@ -159,8 +164,8 @@ def _clean(value: Any) -> str:
     if isinstance(value, list):
         value = value[0] if value else ""
     if isinstance(value, dict):
-        value = value.get("name") or value.get("text") or ""
-    return re.sub(r"\s+", " ", str(value or "")).strip()
+        value = value.get("name") or value.get("text") or value.get("value") or ""  # `value`: QuantitativeValue
+    return re.sub(r"\s+", " ", unescape(str(value or ""))).strip()
 
 
 def _lines(value: Any) -> list[str]:
@@ -178,14 +183,14 @@ def extract(html: str) -> Extracted:
     title = _clean("".join(parser.title_parts))
     for block in parser.ld_blocks:
         try:
-            data = json.loads(block)
-        except ValueError:
-            continue  # a site's broken block shouldn't hide a good one
-        for recipe in _recipes(data):
-            ingredients = _lines(recipe.get("recipeIngredient"))
-            if ingredients:
-                return Extracted(_clean(recipe.get("name")) or title, _clean(recipe.get("recipeYield")),
-                                 ingredients, "")
+            data = json.loads(LD_WRAPPER.sub("", block))
+            for recipe in _recipes(data):
+                ingredients = _lines(recipe.get("recipeIngredient"))
+                if ingredients:
+                    return Extracted(_clean(recipe.get("name")) or title, _clean(recipe.get("recipeYield")),
+                                     ingredients, "")
+        except (ValueError, RecursionError):
+            continue  # a site's broken (or absurdly nested) block shouldn't hide a good one
     text = re.sub(r"\s+", " ", " ".join(parser.text_parts)).strip()[:MAX_TEXT]
     if len(text) < MIN_TEXT:
         raise RecipeError(422, NO_RECIPE)
