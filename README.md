@@ -439,6 +439,7 @@ Run once after setup, or after changes that touch the Kroger client:
 | v3 Order history | [docs/plans/2026-10-26-order-history-design.md](docs/plans/2026-10-26-order-history-design.md) | [docs/plans/2026-10-26-order-history.md](docs/plans/2026-10-26-order-history.md) |
 | v4 Photo suggestions | [docs/plans/2026-10-26-photo-suggest-design.md](docs/plans/2026-10-26-photo-suggest-design.md) | built directly from the design |
 | v5 Packaging and redeployment | [docs/plans/2026-10-28-packaging-design.md](docs/plans/2026-10-28-packaging-design.md) | [docs/plans/2026-10-28-packaging.md](docs/plans/2026-10-28-packaging.md) |
+| v6 Recipe URL suggestions | [docs/plans/2026-10-29-recipe-url-design.md](docs/plans/2026-10-29-recipe-url-design.md) | [docs/plans/2026-10-29-recipe-url.md](docs/plans/2026-10-29-recipe-url.md) |
 
 ## Limitations
 
