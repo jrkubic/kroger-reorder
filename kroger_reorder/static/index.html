@@ -17,9 +17,10 @@
   .banner.error { display:block; background:#fde8e6; color:var(--danger); }
   .banner.ok { display:block; background:#e4f5ea; color:var(--ok); }
   .banner.warn { display:block; background:#fff4d6; color:#7a5300; }
-  input[type=text], input[type=number], select, textarea { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); }
+  input[type=text], input[type=number], input[type=url], select, textarea { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); }
   input[type=number] { width:64px; }
   textarea { width:100%; margin:8px 0; resize:vertical; }
+  #recipe-url { width:100%; }
   button { font:inherit; padding:8px 14px; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; }
   button.secondary { background:#eceeea; color:var(--ink); }
   button.danger { background:transparent; color:var(--danger); padding:4px 8px; }
@@ -77,6 +78,9 @@
   .kind { font-size:.75rem; border-radius:999px; padding:2px 8px; margin-right:6px; vertical-align:middle; }
   .kind.seen { background:#e4f5ea; color:var(--ok); }
   .kind.suggested { background:#fff4d6; color:#7a5300; }
+  .kind.needed { background:#e4f5ea; color:var(--ok); }
+  .kind.staple { background:#eef0f3; color:#555; }
+  .kind.on_list { background:#e8ecff; color:#2b3fa8; }
   #usage-table td:not(:first-child), #usage-table th:not(:first-child) { white-space:nowrap; color:var(--muted); }
   .hidden { display:none !important; }
   @media (max-width: 400px) { .thumb { width:44px; height:44px; } .results .thumb { width:36px; height:36px; } .sale, .price { white-space:normal; } }
@@ -138,6 +142,7 @@
       </div>
       <div class="row">
         <button class="secondary" data-action="photo" title="Photograph your fridge or pantry and get a suggested list">Photo</button>
+        <button class="secondary" data-action="recipe" title="Paste a recipe link and get the groceries it needs">Recipe</button>
         <button class="secondary" data-action="import">Import</button>
         <button class="secondary" data-action="export">Export CSV</button>
       </div>
@@ -223,6 +228,23 @@
   <div class="row">
     <button id="photo-go" disabled>Suggest a list</button>
     <button id="photo-close" class="secondary">Cancel</button>
+  </div>
+</dialog>
+
+<dialog id="recipe-dialog">
+  <h2>Groceries from a recipe</h2>
+  <p class="muted">Paste the link to a recipe. Claude reads its ingredient list and proposes what to buy, skipping what your list already has and the pantry staples a kitchen keeps. You review every line before it's added.</p>
+  <p id="recipe-backend" class="muted"></p>
+  <div class="row">
+    <label class="muted" for="recipe-list">Add to</label>
+    <select id="recipe-list"></select>
+  </div>
+  <input id="recipe-url" type="url" placeholder="https://www.example.com/recipes/chicken-tikka-masala" style="margin-top:10px">
+  <textarea id="recipe-note" rows="2" placeholder="Anything to add? e.g. double it, skipping the sauce, we already have chicken"></textarea>
+  <div id="recipe-banner" class="banner"></div>
+  <div class="row">
+    <button id="recipe-go" disabled>Suggest groceries</button>
+    <button id="recipe-close" class="secondary">Cancel</button>
   </div>
 </dialog>
 

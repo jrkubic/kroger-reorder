@@ -308,6 +308,8 @@ $('list-section').addEventListener('click', async (e) => {
       openImport();
     } else if (action === 'photo') {
       openPhoto();
+    } else if (action === 'recipe') {
+      openRecipe();
     } else if (action === 'export') {
       const a = document.createElement('a');
       a.href = listPath('/export.csv');
@@ -374,15 +376,17 @@ function renderImport() {
   tbody.innerHTML = '';
   importRows.forEach((row, idx) => {
     const tr = document.createElement('tr');
+    // Recipe lines the list already covers, or pantry staples, start on Skip; one pick adds them anyway.
+    const skip = row.kind === 'staple' || row.kind === 'on_list';
     const options = row.candidates.map((c, ci) =>
-      `<option value="${ci}" ${ci === 0 ? 'selected' : ''}>${c.fromFile ? 'From file: ' : ''}${esc(c.name)}${c.size ? ' · ' + esc(c.size) : ''}${c.price != null || c.promo != null ? ' · ' + money(c.promo ?? c.price) : ''}</option>`
+      `<option value="${ci}" ${ci === 0 && !skip ? 'selected' : ''}>${c.fromFile ? 'From file: ' : ''}${esc(c.name)}${c.size ? ' · ' + esc(c.size) : ''}${c.price != null || c.promo != null ? ' · ' + money(c.promo ?? c.price) : ''}</option>`
     ).join('');
-    const kind = row.kind ? `<span class="kind ${esc(row.kind)}">${esc(row.kind)}</span>` : '';
+    const kind = row.kind ? `<span class="kind ${esc(row.kind)}">${esc(row.kind.replace('_', ' '))}</span>` : '';
     const sub = row.kind ? (row.reason || '') : row.raw;
     tr.innerHTML = `
       <td><div>${kind}${esc(row.name)}</div><div class="raw">${esc(sub)}</div></td>
       <td><input type="number" min="1" value="${row.quantity}" data-import-qty="${idx}"></td>
-      <td><select data-import-pick="${idx}">${options}<option value="-1" ${row.candidates.length ? '' : 'selected'}>${row.candidates.length ? 'Skip this line' : 'No match found — skip'}</option></select></td>`;
+      <td><select data-import-pick="${idx}">${options}<option value="-1" ${row.candidates.length && !skip ? '' : 'selected'}>${row.candidates.length ? 'Skip this line' : 'No match found — skip'}</option></select></td>`;
     tbody.appendChild(tr);
   });
   $('import-review').classList.remove('hidden');
@@ -431,18 +435,9 @@ const PHOTO_MAX = 4;
 const PHOTO_EDGE = 1600;   // longest side after downscaling, keeps uploads small and under Claude's limits
 let photoFiles = [];       // [{media_type, data, url}] ready to send
 
-function openPhoto() {
-  photoFiles = [];
-  $('photo-files').value = '';
-  $('photo-note').value = '';
-  $('photo-thumbs').innerHTML = '';
-  $('photo-go').disabled = true;
-  banner(null, '', false, $('photo-banner'));
-  $('photo-backend').textContent = {
-    api: 'Photos are analyzed through the Anthropic API key in .env.',
-    cli: 'Photos are analyzed by Claude Code on the computer running the app.',
-  }[state.photo_backend] || 'Photo analysis isn\'t set up yet: add ANTHROPIC_API_KEY to .env, or install Claude Code on the computer running the app.';
-  const sel = $('photo-list'); sel.innerHTML = '';
+// The "Add to" picker shared by the Photo and Recipe dialogs: every list plus "New list…".
+function fillListPicker(sel) {
+  sel.innerHTML = '';
   state.lists.forEach(l => {
     const opt = document.createElement('option');
     opt.value = l.slug; opt.textContent = l.name; opt.selected = l.slug === state.active_list;
@@ -451,6 +446,36 @@ function openPhoto() {
   const fresh = document.createElement('option');
   fresh.value = '__new__'; fresh.textContent = 'New list…';
   sel.appendChild(fresh);
+}
+
+function backendText(what) {
+  return {
+    api: `${what} analyzed through the Anthropic API key in .env.`,
+    cli: `${what} analyzed by Claude Code on the computer running the app.`,
+  }[state.photo_backend] || 'Claude isn\'t set up yet: add ANTHROPIC_API_KEY to .env, or install Claude Code on the computer running the app.';
+}
+
+// Resolve the picker's choice to a slug, creating the list when "New list…" was chosen. null = cancelled.
+async function pickTargetList(sel) {
+  let slug = sel.value;
+  if (slug === '__new__') {
+    const name = prompt('Name for the new list:');
+    if (!name?.trim()) return null;
+    ({ slug } = await api('POST', '/api/lists', { name }));
+    await refreshLists();
+  }
+  return slug;
+}
+
+function openPhoto() {
+  photoFiles = [];
+  $('photo-files').value = '';
+  $('photo-note').value = '';
+  $('photo-thumbs').innerHTML = '';
+  $('photo-go').disabled = true;
+  banner(null, '', false, $('photo-banner'));
+  $('photo-backend').textContent = backendText('Photos are');
+  fillListPicker($('photo-list'));
   $('photo-dialog').showModal();
 }
 
@@ -498,13 +523,8 @@ $('photo-go').onclick = async () => {
   $('photo-go').disabled = true;
   try {
     // Decide where the items will go first, so the review lands on that list.
-    let slug = $('photo-list').value;
-    if (slug === '__new__') {
-      const name = prompt('Name for the new list:');
-      if (!name?.trim()) { $('photo-go').disabled = false; return; }
-      ({ slug } = await api('POST', '/api/lists', { name }));
-      await refreshLists();
-    }
+    const slug = await pickTargetList($('photo-list'));
+    if (!slug) return;
     banner('warn', 'Claude is looking at your photos… this takes 10 to 30 seconds.', false, pbanner);
     const { lines } = await api('POST', '/api/photo/suggest', {
       photos: photoFiles.map(({ media_type, data }) => ({ media_type, data })),
@@ -519,6 +539,45 @@ $('photo-go').onclick = async () => {
     banner('error', err.message, false, $('photo-dialog').open ? pbanner : $('import-banner'));
   } finally {
     $('photo-go').disabled = photoFiles.length === 0;
+  }
+};
+
+// -- recipe suggestions ------------------------------------------------------------------------
+
+function openRecipe() {
+  $('recipe-url').value = '';
+  $('recipe-note').value = '';
+  $('recipe-go').disabled = true;
+  banner(null, '', false, $('recipe-banner'));
+  $('recipe-backend').textContent = backendText('Recipes are');
+  fillListPicker($('recipe-list'));
+  $('recipe-dialog').showModal();
+  $('recipe-url').focus();
+}
+
+$('recipe-close').onclick = () => $('recipe-dialog').close();
+$('recipe-url').oninput = () => { $('recipe-go').disabled = !$('recipe-url').value.trim(); };
+$('recipe-url').onkeydown = (e) => { if (e.key === 'Enter' && !$('recipe-go').disabled) { e.preventDefault(); $('recipe-go').click(); } };
+
+$('recipe-go').onclick = async () => {
+  const rbanner = $('recipe-banner');
+  const url = $('recipe-url').value.trim();
+  if (!url) return;
+  $('recipe-go').disabled = true;
+  try {
+    const slug = await pickTargetList($('recipe-list'));
+    if (!slug) return;
+    banner('warn', 'Fetching the recipe and asking Claude… this takes 10 to 30 seconds.', false, rbanner);
+    const { title, lines } = await api('POST', '/api/recipe/suggest', { url, slug, note: $('recipe-note').value });
+    if (slug !== state.active_list) await switchList(slug);
+    $('recipe-dialog').close();
+    openImport();
+    banner('warn', `Claude suggested ${plural(lines.length, 'item')} for “${title || 'the recipe'}”. Matching them to your store…`, false, $('import-banner'));
+    await reviewLines(lines, $('import-banner'));
+  } catch (err) {
+    banner('error', err.message, false, $('recipe-dialog').open ? rbanner : $('import-banner'));
+  } finally {
+    $('recipe-go').disabled = !$('recipe-url').value.trim();
   }
 };
 
