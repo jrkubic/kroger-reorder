@@ -25,7 +25,7 @@ class Settings:
     data_dir: Path                       # lists, config, tokens, orders
     photo_model: str = DEFAULT_PHOTO_MODEL   # model for photo suggestions (API or Claude Code)
     photo_timeout: float = DEFAULT_PHOTO_TIMEOUT  # seconds before a photo analysis is abandoned
-    anthropic_api_key: str | None = None  # set -> photos go to the Anthropic API; unset -> Claude Code CLI
+    anthropic_api_key: str | None = None  # set -> photo and recipe suggestions go to the Anthropic API; unset -> Claude Code CLI
 
     @property
     def redirect_uri(self) -> str:

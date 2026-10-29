@@ -485,11 +485,13 @@ These come from Kroger's public API, not from the app:
 | `Claude Code failed: ...` | Usually a sign-in or usage-limit problem on the PC. Run `claude` there once to check, then try again. |
 | Sign-in button missing on a NAS or server install | Open the app at exactly the address in `PUBLIC_URL`, or use the SSH tunnel in [Running on another machine](#running-on-another-machine). |
 | Docker: `Kroger sign-in failed` with a redirect mismatch | The redirect URL on the Kroger app must be `<PUBLIC_URL>/callback`; set `PUBLIC_URL` in `.env` to the address you open in the browser. |
-| Photo analysis times out | Use fewer or clearer photos, or raise `PHOTO_TIMEOUT` in `.env`. |
+| Photo analysis or a recipe suggestion times out (`Claude took longer than ... seconds`) | Use fewer or clearer photos, or a shorter recipe page, or raise `PHOTO_TIMEOUT` in `.env`. |
 | `Enter a full web address starting with http:// or https://.` | Paste the whole link from the browser's address bar. |
 | `That site refused the request (HTTP 403)...` | The site blocks automated visitors. Copy the ingredients from the page into **Import**. |
 | `Couldn't fetch that page: ...` | The computer running the app could not reach the site; check the address and its network. |
 | `That address isn't a web page.` | The link points at a PDF, image or file. Use the recipe page's own link. |
+| `That page is too large to read.` | The page is over 2 MB. Use the recipe's own page, or copy the ingredients into **Import**. |
+| `Claude declined to read that recipe` or `Claude's answer was cut off; try a recipe with fewer ingredients.` | Try a different recipe page, or copy the ingredients into **Import**. |
 | `Couldn't find a recipe on that page.` | Search results, category pages and pages that draw ingredients with scripts have nothing to read. Open the recipe itself, or use **Import**. |
 | `Claude couldn't find any ingredients on that page.` | The page text had no recognizable recipe. Use **Import** with the ingredients copied from the page. |
 

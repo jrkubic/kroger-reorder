@@ -1,4 +1,4 @@
-# Kroger Reorder in a container. Photos need ANTHROPIC_API_KEY (no Claude Code inside the image).
+# Kroger Reorder in a container. Photo and recipe suggestions need ANTHROPIC_API_KEY (no Claude Code inside the image).
 FROM python:3.13-slim
 
 WORKDIR /app
