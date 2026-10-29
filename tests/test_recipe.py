@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from kroger_reorder.recipe import (BAD_URL, NO_RECIPE, NOT_HTML, TOO_LARGE, MAX_BYTES, RecipeError,
-                                   fetch_page)
+                                   extract, fetch_page)
 
 
 def transport(handler):
@@ -104,3 +104,58 @@ def test_fetch_connection_failure_is_502():
         fetch_page("https://nope.test/r", transport=transport(handler))
     assert exc.value.status == 502
     assert exc.value.message.startswith("Couldn't fetch that page: ") and "getaddrinfo failed" in exc.value.message
+
+
+# -- extract --------------------------------------------------------------------------
+
+def ld(obj):
+    return f'<script type="application/ld+json">{json.dumps(obj)}</script>'
+
+
+RECIPE = {"@context": "https://schema.org", "@type": "Recipe", "name": "Chicken Tikka Masala",
+          "recipeYield": ["4", "4 servings"],
+          "recipeIngredient": ["2 lbs boneless chicken thighs", "1 cup plain yogurt", "  2 tbsp  garam masala "]}
+
+
+def test_extract_reads_recipe_object():
+    out = extract(f"<html><head><title>Site</title>{ld(RECIPE)}</head><body>junk</body></html>")
+    assert out.title == "Chicken Tikka Masala" and out.yield_ == "4"
+    assert out.ingredients == ["2 lbs boneless chicken thighs", "1 cup plain yogurt", "2 tbsp garam masala"]
+    assert out.text == ""
+
+
+def test_extract_finds_recipe_inside_graph_with_type_list_after_a_broken_block():
+    doc = {"@context": "https://schema.org", "@graph": [
+        {"@type": "WebPage", "name": "A page"},
+        {"@type": ["Recipe", "NewsArticle"], "name": "Soup", "recipeIngredient": "1 onion"},
+    ]}
+    html = '<script type="application/ld+json">{not json</script>' + ld(doc)
+    out = extract(html)
+    assert out.title == "Soup" and out.ingredients == ["1 onion"] and out.yield_ == ""
+
+
+def test_extract_skips_recipe_objects_without_ingredients():
+    html = ld({"@type": "Recipe", "name": "Empty"}) + ld({"@type": "Recipe", "name": "Full", "recipeIngredient": ["salt"]})
+    assert extract(html).title == "Full"
+
+
+def test_extract_falls_back_to_visible_text_without_scripts_nav_or_tags():
+    body = "<p>Ingredients</p><ul><li>2 eggs</li><li>1 cup flour</li></ul>" + "<p>more text</p>" * 30
+    html = (f"<html><head><title>Pancakes | Site</title><style>p{{}}</style><script>var x=1;</script></head>"
+            f"<body><nav>Home Recipes</nav><header>Logo</header>{body}<footer>© Site</footer></body></html>")
+    out = extract(html)
+    assert out.title == "Pancakes | Site" and out.ingredients == []
+    assert "2 eggs 1 cup flour" in out.text
+    for gone in ("var x=1", "p{}", "Home Recipes", "Logo", "© Site", "<li>"):
+        assert gone not in out.text
+
+
+def test_extract_with_too_little_text_is_422():
+    with pytest.raises(RecipeError) as exc:
+        extract("<html><body><p>Search results</p></body></html>")
+    assert exc.value.status == 422 and exc.value.message == NO_RECIPE
+
+
+def test_extract_truncates_long_text():
+    html = "<html><body>" + "<p>word</p>" * 10000 + "</body></html>"
+    assert len(extract(html).text) <= 20_000

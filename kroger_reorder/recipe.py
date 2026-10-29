@@ -8,7 +8,12 @@
 """
 from __future__ import annotations
 
+import json
+import re
+from collections.abc import Iterator
 from dataclasses import dataclass
+from html.parser import HTMLParser
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
@@ -17,6 +22,8 @@ from .vision import VisionError
 
 MAX_BYTES = 2 * 1024 * 1024
 TIMEOUT = 15.0
+MAX_TEXT = 20_000   # characters of page text handed to Claude when there is no JSON-LD recipe
+MIN_TEXT = 200      # below this the page is a search page, a login wall, or an error
 HTML_TYPES = ("text/html", "application/xhtml+xml")
 HEADERS = {
     # Many recipe sites answer 403 to anything that doesn't look like a browser.
@@ -82,3 +89,104 @@ def fetch_page(url: str, *, transport: httpx.BaseTransport | None = None) -> Pag
         reason = (str(exc) or exc.__class__.__name__).rstrip(".")
         raise RecipeError(502, f"Couldn't fetch that page: {reason}. Check the address and try again.") from exc
     return Page(url=final_url, html=b"".join(chunks).decode(encoding, errors="replace"))
+
+
+# -- extract ----------------------------------------------------------------------------
+
+@dataclass
+class Extracted:
+    title: str
+    yield_: str
+    ingredients: list[str]  # from JSON-LD; empty when the page had no Recipe object
+    text: str               # visible page text, only filled when `ingredients` is empty
+
+
+class _Collector(HTMLParser):
+    """One pass over the HTML: collects JSON-LD script blocks, the <title>, and the visible text."""
+    SKIP = {"script", "style", "noscript", "template", "svg", "nav", "header", "footer"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.ld_blocks: list[str] = []
+        self.title_parts: list[str] = []
+        self.text_parts: list[str] = []
+        self._ld: list[str] | None = None
+        self._in_title = False
+        self._skip = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "script" and (dict(attrs).get("type") or "").strip().lower() == "application/ld+json":
+            self._ld = []
+        if tag in self.SKIP:
+            self._skip += 1
+        if tag == "title":
+            self._in_title = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script" and self._ld is not None:
+            self.ld_blocks.append("".join(self._ld))
+            self._ld = None
+        if tag in self.SKIP and self._skip:
+            self._skip -= 1
+        if tag == "title":
+            self._in_title = False
+
+    def handle_data(self, data: str) -> None:
+        if self._ld is not None:
+            self._ld.append(data)
+        elif self._in_title:
+            self.title_parts.append(data)
+        elif not self._skip:
+            self.text_parts.append(data)
+
+
+def _recipes(node: Any) -> Iterator[dict]:
+    """Every object typed Recipe, wherever it sits: top level, a list, or nested under @graph etc."""
+    if isinstance(node, list):
+        for child in node:
+            yield from _recipes(child)
+    elif isinstance(node, dict):
+        types = node.get("@type")
+        types = types if isinstance(types, list) else [types]
+        if any(str(t).lower() == "recipe" for t in types if t):
+            yield node
+        for child in node.values():
+            if isinstance(child, (list, dict)):
+                yield from _recipes(child)
+
+
+def _clean(value: Any) -> str:
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    if isinstance(value, dict):
+        value = value.get("name") or value.get("text") or ""
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _lines(value: Any) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [line for line in (_clean(v) for v in value) if line]
+
+
+def extract(html: str) -> Extracted:
+    parser = _Collector()
+    parser.feed(html)
+    parser.close()
+    title = _clean("".join(parser.title_parts))
+    for block in parser.ld_blocks:
+        try:
+            data = json.loads(block)
+        except ValueError:
+            continue  # a site's broken block shouldn't hide a good one
+        for recipe in _recipes(data):
+            ingredients = _lines(recipe.get("recipeIngredient"))
+            if ingredients:
+                return Extracted(_clean(recipe.get("name")) or title, _clean(recipe.get("recipeYield")),
+                                 ingredients, "")
+    text = re.sub(r"\s+", " ", " ".join(parser.text_parts)).strip()[:MAX_TEXT]
+    if len(text) < MIN_TEXT:
+        raise RecipeError(422, NO_RECIPE)
+    return Extracted(title, "", [], text)
