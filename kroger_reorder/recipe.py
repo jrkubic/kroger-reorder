@@ -46,7 +46,10 @@ class Page:
 
 def validate_url(url: str) -> str:
     url = (url or "").strip()
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+    except ValueError as exc:   # e.g. an unbalanced IPv6 bracket
+        raise RecipeError(400, BAD_URL) from exc
     if parts.scheme not in ("http", "https") or not parts.netloc:
         raise RecipeError(400, BAD_URL)
     return url
@@ -71,7 +74,11 @@ def fetch_page(url: str, *, transport: httpx.BaseTransport | None = None) -> Pag
                     chunks.append(chunk)
                 encoding = response.encoding or "utf-8"
                 final_url = str(response.url)
+    except httpx.InvalidURL as exc:
+        # Not an HTTPError: raised for control characters in the address or a redirect to a scheme
+        # httpx cannot follow (e.g. `Location: javascript:...`).
+        raise RecipeError(400, BAD_URL) from exc
     except httpx.HTTPError as exc:
-        reason = str(exc) or exc.__class__.__name__
+        reason = (str(exc) or exc.__class__.__name__).rstrip(".")
         raise RecipeError(502, f"Couldn't fetch that page: {reason}. Check the address and try again.") from exc
     return Page(url=final_url, html=b"".join(chunks).decode(encoding, errors="replace"))

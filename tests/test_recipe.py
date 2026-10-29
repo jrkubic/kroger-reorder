@@ -17,7 +17,8 @@ def html_response(body="<html><body>hi</body></html>", status=200, content_type=
 
 # -- fetch_page -----------------------------------------------------------------------
 
-@pytest.mark.parametrize("url", ["", "   ", "allrecipes.com/recipe/1", "ftp://x/y", "http://", "javascript:alert(1)"])
+@pytest.mark.parametrize("url", ["", "   ", "allrecipes.com/recipe/1", "ftp://x/y", "http://", "javascript:alert(1)",
+                                 "http://[bad/"])
 def test_fetch_rejects_urls_without_http_scheme_and_host(url):
     with pytest.raises(RecipeError) as exc:
         fetch_page(url, transport=transport(lambda r: html_response()))
@@ -35,6 +36,23 @@ def test_fetch_returns_html_and_final_url_after_redirect():
     page = fetch_page("https://site.test/old", transport=transport(handler))
     assert page.url == "https://site.test/new" and "<title>Soup</title>" in page.html
     assert all("Mozilla" in ua for _, ua in seen), "recipe sites block non-browser user agents"
+
+
+def test_fetch_redirect_to_unsupported_scheme_is_400():
+    def handler(request):
+        return httpx.Response(302, headers={"location": "javascript:alert(1)"})
+    with pytest.raises(RecipeError) as exc:
+        fetch_page("https://site.test/r", transport=transport(handler))
+    assert exc.value.status == 400 and exc.value.message == BAD_URL
+
+
+def test_fetch_redirect_loop_is_502_without_doubled_period():
+    def handler(request):
+        return httpx.Response(301, headers={"location": str(request.url)})
+    with pytest.raises(RecipeError) as exc:
+        fetch_page("https://site.test/loop", transport=transport(handler))
+    assert exc.value.status == 502
+    assert exc.value.message.startswith("Couldn't fetch that page: ") and ".." not in exc.value.message
 
 
 def test_fetch_http_error_is_502_with_status_and_import_hint():
@@ -55,6 +73,21 @@ def test_fetch_missing_content_type_is_tolerated():
     def handler(request):
         return httpx.Response(200, content=b"<html>x</html>")
     assert fetch_page("https://site.test/r", transport=transport(handler)).html == "<html>x</html>"
+
+
+def test_fetch_decodes_declared_charset():
+    def handler(request):
+        return httpx.Response(200, content="<p>café</p>".encode("iso-8859-1"),
+                              headers={"content-type": "text/html; charset=iso-8859-1"})
+    assert "café" in fetch_page("https://site.test/r", transport=transport(handler)).html
+
+
+def test_fetch_exactly_max_bytes_succeeds():
+    body = b"x" * MAX_BYTES
+
+    def handler(request):
+        return httpx.Response(200, content=body, headers={"content-type": "text/html"})
+    assert len(fetch_page("https://site.test/r", transport=transport(handler)).html) == MAX_BYTES
 
 
 def test_fetch_oversize_is_413():
