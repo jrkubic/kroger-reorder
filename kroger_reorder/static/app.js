@@ -6,7 +6,7 @@ const STALE_MS = 24 * 60 * 60 * 1000;
 
 let state = { store: null, signed_in: false, lists: [], active_list: null, name: '', items: [], warning: null,
               photo_backend: null, public_url: null };
-let importRows = [];  // [{raw, name, quantity, candidates}]
+let importRows = [];  // [{raw, name, quantity, candidates, kind?, reason?}]  (kind/reason only from Photo and Recipe)
 let orders = [];        // from GET /api/orders, newest first
 let openOrderId = null; // which order row is expanded
 
