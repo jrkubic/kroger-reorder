@@ -21,11 +21,12 @@ import uvicorn
 from . import __version__
 from .kroger import KrogerClient
 from .main import create_app
+from .recipe import suggest as suggest_recipe
 from .settings import load_settings
 from .storage import Storage
 from .vision import analyze, choose_backend
 
-PHOTO_LABELS = {
+CLAUDE_LABELS = {
     "api": "Anthropic API (ANTHROPIC_API_KEY)",
     "cli": "Claude Code on this computer",
     None: "off (set ANTHROPIC_API_KEY in .env, or install Claude Code)",
@@ -87,6 +88,7 @@ def main(argv: list[str] | None = None) -> None:
         storage, kroger,
         photo_model=settings.photo_model, photo_timeout=settings.photo_timeout,
         analyzer=partial(analyze, api_key=settings.anthropic_api_key),
+        recipe_suggester=partial(suggest_recipe, api_key=settings.anthropic_api_key),
         photo_backend=backend, public_url=settings.public_url,
     )  # also migrates v1 data and ensures a default list
     if port_in_use(settings.port):
@@ -100,7 +102,7 @@ def main(argv: list[str] | None = None) -> None:
     if ip := lan_ip():
         print(f"  On your wifi:  http://{ip}:{settings.port}", flush=True)
     print(f"  Data folder:   {settings.data_dir}", flush=True)
-    print(f"  Photos:        {PHOTO_LABELS.get(backend, str(backend))}", flush=True)
+    print(f"  Claude:        {CLAUDE_LABELS.get(backend, str(backend))}", flush=True)
     where = "this computer or the public URL" if settings.public_url != local else "this computer"
     print(f"  Sign in to Kroger from {where}; other devices share the sign-in.  (Ctrl+C to stop)", flush=True)
     if not args.no_browser:

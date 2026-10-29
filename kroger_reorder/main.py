@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from .importer import parse as parse_import
 from .kroger import KrogerError, NotSignedIn
 from .orders import build_order
+from .recipe import extract as extract_recipe, fetch_page, suggest as suggest_recipe
 from .settings import DEFAULT_PHOTO_MODEL
 from .storage import Item, ListLoad, Storage
 from .usage import profile_text, usage_profile
@@ -92,6 +93,12 @@ class PhotoRequest(BaseModel):
     note: str = ""
 
 
+class RecipeRequest(BaseModel):
+    url: str
+    slug: str
+    note: str = ""
+
+
 class ImportItem(BaseModel):
     upc: str
     name: str
@@ -117,10 +124,12 @@ class OrderNotFound(Exception):
 
 
 def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MODEL, photo_timeout: float = 90.0,
-               analyzer=analyze_photos, photo_backend: str | None = None,
+               analyzer=analyze_photos, page_fetcher=fetch_page, recipe_suggester=suggest_recipe,
+               photo_backend: str | None = None,
                public_url: str = "http://localhost:8000") -> FastAPI:
     """`kroger` is a KrogerClient or anything with the same methods (tests pass a fake).
     `analyzer` has the signature of vision.analyze; tests pass a fake so nothing external is called.
+    `page_fetcher(url) -> recipe.Page` and `recipe_suggester(...)` are the recipe equivalents of `analyzer`.
     `photo_backend` ('api' | 'cli' | None) and `public_url` are reported to the page via /api/state."""
     storage.ensure_ready()
     app = FastAPI(title="Kroger Reorder")
@@ -151,6 +160,7 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
 
     @app.exception_handler(VisionError)
     async def vision_error(_: Request, exc: VisionError):
+        # Also answers recipe.RecipeError, a VisionError subclass with the same status + message contract.
         return error(exc.status, exc.message)
 
     @app.exception_handler(RequestValidationError)
@@ -184,6 +194,10 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
     def current_store() -> dict:
         config = storage.load_config()
         return {"store_id": config.get("store_id"), "store_name": config.get("store_name")}
+
+    def suggestion_line(s) -> dict:
+        return {"raw": f"{s.kind}: {s.reason}" if s.reason else s.kind, "name": s.name,
+                "quantity": s.quantity, "exact": None, "kind": s.kind, "reason": s.reason}
 
     def rejected_upcs(exc: KrogerError, upcs: list[str]) -> list[str]:
         # Whole-token match so "1111041" is not flagged when Kroger rejects "0001111041700".
@@ -424,7 +438,7 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
                                       list_name=source.get("list_name"), reorder_of=order_id)
         return {"order": order, "warning": warning}
 
-    # -- usage profile and photo suggestions -------------------------------------------------
+    # -- usage profile, photo and recipe suggestions ---------------------------------------------
     @app.get("/api/usage")
     def usage():
         return {"items": usage_profile(storage.list_orders())}
@@ -458,12 +472,23 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
                 path.write_bytes(raw)
                 paths.append(path)
             suggestions = analyzer(paths, body.note, profile, model=photo_model, timeout=photo_timeout)
-        lines = [{"raw": f"{s.kind}: {s.reason}" if s.reason else s.kind, "name": s.name,
-                  "quantity": s.quantity, "exact": None, "kind": s.kind, "reason": s.reason}
-                 for s in suggestions]
+        lines = [suggestion_line(s) for s in suggestions]
         if not lines:
             return error(422, "Claude couldn't find any groceries in those photos. Try a clearer or closer shot.")
         return {"lines": lines}
+
+    @app.post("/api/recipe/suggest")
+    def recipe_suggest(body: RecipeRequest):
+        loaded = get_list(body.slug)          # 404 before any network call
+        page = page_fetcher(body.url)
+        extracted = extract_recipe(page.html)
+        profile = profile_text(usage_profile(storage.list_orders()))
+        suggestions = recipe_suggester(extracted, body.note, loaded.name, loaded.items, profile,
+                                       model=photo_model, timeout=photo_timeout)
+        lines = [suggestion_line(s) for s in suggestions]
+        if not lines:
+            return error(422, "Claude couldn't find any ingredients on that page.")
+        return {"title": extracted.title, "lines": lines}
 
     # -- import ----------------------------------------------------------------------------
     @app.post("/api/import/parse")

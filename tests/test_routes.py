@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from kroger_reorder.kroger import KrogerError, NotSignedIn
 from kroger_reorder.main import create_app
+from kroger_reorder.recipe import Extracted, Page, RecipeError
 from kroger_reorder.storage import Item, Storage
 from kroger_reorder.vision import Suggestion, VisionError
 
@@ -717,3 +718,80 @@ def test_import_commit_merges_and_bumps_quantities(client):
     items = r.json()["items"]
     assert [(i["upc"], i["quantity"], i["included"]) for i in items] == [("0001", 3, True), ("0002", 3, True)]
     assert items[1]["image"] is None
+
+
+# -- recipe suggestions ---------------------------------------------------------------------
+
+RECIPE_HTML = ('<html><head><title>Site</title><script type="application/ld+json">'
+               '{"@type":"Recipe","name":"Tikka Masala","recipeYield":"4","recipeIngredient":["2 lbs chicken","1 cup yogurt"]}'
+               '</script></head><body></body></html>')
+
+
+@pytest.fixture
+def recipe_client(storage, kroger):
+    calls = {"fetch": [], "suggest": []}
+
+    def fetch(url):
+        calls["fetch"].append(url)
+        return Page(url=url, html=RECIPE_HTML)
+
+    def suggester(page, note, list_name, items, profile, *, model, timeout):
+        calls["suggest"].append({"page": page, "note": note, "list_name": list_name, "items": list(items),
+                                 "profile": profile, "model": model, "timeout": timeout})
+        return [Suggestion("chicken thighs", 2, "needed", "Two pounds"), Suggestion("large eggs", 1, "on_list", "already on your list: Eggs ×1")]
+    app = create_app(storage, kroger, photo_model="test-model", photo_timeout=7, page_fetcher=fetch,
+                     recipe_suggester=suggester)
+    client = TestClient(app, follow_redirects=False)
+    client.calls = calls
+    return client
+
+
+def test_recipe_suggest_fetches_extracts_and_passes_list_items(recipe_client, storage):
+    push_one(recipe_client)  # records an order (usage profile) but also overwrites the list with Whole Milk
+    storage.save_list("standard", "Standard", [Item(upc="0002", name="Eggs", size="12 ct", quantity=1)])
+    r = recipe_client.post("/api/recipe/suggest", json={"url": "https://site.test/r", "slug": "standard", "note": "double it"})
+    assert r.status_code == 200, r.text
+    assert r.json()["title"] == "Tikka Masala"
+    assert r.json()["lines"] == [
+        {"raw": "needed: Two pounds", "name": "chicken thighs", "quantity": 2, "exact": None, "kind": "needed", "reason": "Two pounds"},
+        {"raw": "on_list: already on your list: Eggs ×1", "name": "large eggs", "quantity": 1, "exact": None, "kind": "on_list", "reason": "already on your list: Eggs ×1"},
+    ]
+    assert recipe_client.calls["fetch"] == ["https://site.test/r"]
+    (call,) = recipe_client.calls["suggest"]
+    assert isinstance(call["page"], Extracted) and call["page"].ingredients == ["2 lbs chicken", "1 cup yogurt"]
+    assert call["note"] == "double it" and call["list_name"] == "Standard"
+    assert [i.name for i in call["items"]] == ["Eggs"]
+    assert "Whole Milk" in call["profile"] and call["model"] == "test-model" and call["timeout"] == 7
+
+
+def test_recipe_suggest_unknown_list_is_404(recipe_client):
+    r = recipe_client.post("/api/recipe/suggest", json={"url": "https://site.test/r", "slug": "nope"})
+    assert r.status_code == 404 and not recipe_client.calls["fetch"]
+
+
+def test_recipe_suggest_passes_fetch_and_claude_errors_through(storage, kroger):
+    def refused(url):
+        raise RecipeError(502, "That site refused the request (HTTP 403). Copy the ingredients from the page and use Import instead.")
+    client = TestClient(create_app(storage, kroger, page_fetcher=refused))
+    r = client.post("/api/recipe/suggest", json={"url": "https://site.test/r", "slug": "standard"})
+    assert r.status_code == 502 and r.json()["error"].startswith("That site refused the request (HTTP 403)")
+
+    def broken(*a, **k):
+        raise VisionError(503, "Photos can't be analyzed: set ANTHROPIC_API_KEY in .env, or install Claude Code on the computer running the app.")
+    client = TestClient(create_app(storage, kroger, page_fetcher=lambda url: Page(url, RECIPE_HTML), recipe_suggester=broken))
+    r = client.post("/api/recipe/suggest", json={"url": "https://site.test/r", "slug": "standard"})
+    assert r.status_code == 503
+
+
+def test_recipe_suggest_without_recipe_on_page_is_422(storage, kroger):
+    client = TestClient(create_app(storage, kroger, page_fetcher=lambda url: Page(url, "<html><body>nothing</body></html>"),
+                                   recipe_suggester=lambda *a, **k: []))
+    r = client.post("/api/recipe/suggest", json={"url": "https://site.test/r", "slug": "standard"})
+    assert r.status_code == 422 and r.json()["error"].startswith("Couldn't find a recipe on that page.")
+
+
+def test_recipe_suggest_with_no_suggestions_is_422(storage, kroger):
+    client = TestClient(create_app(storage, kroger, page_fetcher=lambda url: Page(url, RECIPE_HTML),
+                                   recipe_suggester=lambda *a, **k: []))
+    r = client.post("/api/recipe/suggest", json={"url": "https://site.test/r", "slug": "standard"})
+    assert r.status_code == 422 and r.json()["error"] == "Claude couldn't find any ingredients on that page."
