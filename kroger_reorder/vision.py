@@ -1,5 +1,6 @@
 # kroger_reorder/vision.py
-"""Turn photos of a fridge, pantry or cupboard into grocery suggestions.
+"""Turn photos of a fridge, pantry or cupboard into grocery suggestions, and host the shared Claude
+call (`complete()`) that `recipe.py` also uses to turn a recipe page into a list.
 
 Two backends, chosen by configuration:
 
@@ -17,7 +18,7 @@ import json
 import re
 import shutil
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,8 +56,27 @@ class VisionError(Exception):
         self.message = message
 
 
-def _timeout_error(timeout: float) -> VisionError:
-    return VisionError(504, f"Claude took longer than {int(timeout)} seconds; try fewer or smaller photos.")
+@dataclass(frozen=True)
+class Wording:
+    """Feature-specific halves of the messages the shared backend code raises."""
+    timeout: str    # "...; <timeout>." after "Claude took longer than N seconds"
+    refusal: str    # whole message when Claude refuses
+    truncated: str  # whole message when the answer hit max_tokens
+
+
+PHOTO_WORDING = Wording(
+    timeout="try fewer or smaller photos",
+    refusal="Claude declined to analyze these photos; try different ones.",
+    truncated="Claude's answer was cut off; try fewer photos or a shorter note.",
+)
+
+
+class CliTimeout(Exception):
+    """Raised by a runner when `claude` exceeds the timeout; `complete()` turns it into a 504."""
+
+
+def _timeout_error(timeout: float, hint: str) -> VisionError:
+    return VisionError(504, f"Claude took longer than {int(timeout)} seconds; {hint}.")
 
 
 @dataclass
@@ -114,7 +134,7 @@ def _extract_json_array(text: str) -> list:
     return data
 
 
-def parse_suggestions(result_text: str) -> list[Suggestion]:
+def parse_suggestions(result_text: str, kinds: Sequence[str] = KINDS) -> list[Suggestion]:
     try:
         data = _extract_json_array(result_text)
     except ValueError as exc:
@@ -131,11 +151,11 @@ def parse_suggestions(result_text: str) -> list[Suggestion]:
             quantity = int(entry.get("quantity", 1))
         except (TypeError, ValueError):
             quantity = 1
-        kind = str(entry.get("kind") or "seen").lower()
+        kind = str(entry.get("kind") or kinds[0]).lower()
         out.append(Suggestion(
             name=name,
             quantity=min(MAX_QUANTITY, max(1, quantity)),
-            kind=kind if kind in KINDS else "seen",
+            kind=kind if kind in kinds else kinds[0],
             reason=str(entry.get("reason") or "").strip(),
         ))
         if len(out) >= MAX_ITEMS:
@@ -153,15 +173,16 @@ def _image_block(path: Path) -> dict:
     return {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}}
 
 
-def analyze_api(photos: list[Path], note: str, profile: str, *, model: str, timeout: float, api_key: str,
-                make_client: Callable[..., object] = anthropic.Anthropic) -> list[Suggestion]:
+def complete_api(system: str, user_text: str, *, images: Sequence[Path] = (), wording: Wording,
+                 model: str, timeout: float, api_key: str,
+                 make_client: Callable[..., object] = anthropic.Anthropic) -> str:
     client = make_client(api_key=api_key, timeout=timeout, max_retries=API_MAX_RETRIES)
-    content = [_image_block(p) for p in photos] + [{"type": "text", "text": context_text(note, profile)}]
+    content = [_image_block(p) for p in images] + [{"type": "text", "text": user_text}]
     try:
         message = client.messages.create(
             model=model,
             max_tokens=API_MAX_TOKENS,
-            system=SYSTEM,
+            system=system,
             messages=[{"role": "user", "content": content}],
         )
     except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
@@ -173,7 +194,7 @@ def analyze_api(photos: list[Path], note: str, profile: str, *, model: str, time
     except (anthropic.OverloadedError, anthropic.ServiceUnavailableError) as exc:
         raise VisionError(503, "Anthropic is busy; try again in a minute.") from exc
     except anthropic.APITimeoutError as exc:
-        raise _timeout_error(timeout) from exc
+        raise _timeout_error(timeout, wording.timeout) from exc
     except anthropic.APIConnectionError as exc:
         raise VisionError(502, "Couldn't reach Anthropic; check the network on the computer running the app.") from exc
     except anthropic.APIStatusError as exc:
@@ -186,11 +207,10 @@ def analyze_api(photos: list[Path], note: str, profile: str, *, model: str, time
     except anthropic.APIError as exc:
         raise VisionError(502, f"Anthropic error: {exc.message}") from exc
     if message.stop_reason == "refusal":
-        raise VisionError(502, "Claude declined to analyze these photos; try different ones.")
+        raise VisionError(502, wording.refusal)
     if message.stop_reason == "max_tokens":
-        raise VisionError(502, "Claude's answer was cut off; try fewer photos or a shorter note.")
-    text = "".join(block.text for block in message.content if block.type == "text")
-    return parse_suggestions(text)
+        raise VisionError(502, wording.truncated)
+    return "".join(block.text for block in message.content if block.type == "text")
 
 
 # -- CLI backend ------------------------------------------------------------------------
@@ -202,26 +222,32 @@ def run_cli(args: list[str], stdin_text: str, timeout: float) -> RunResult:
         proc = subprocess.run(args, input=stdin_text, capture_output=True, text=True, encoding="utf-8",
                               timeout=timeout)
     except subprocess.TimeoutExpired as exc:
-        raise _timeout_error(timeout) from exc
+        raise CliTimeout() from exc
     return RunResult(proc.returncode, proc.stdout or "", proc.stderr or "")
 
 
-def build_prompt(photos: list[Path], note: str, profile: str) -> str:
-    lines = ["Use the Read tool to look at each of these photos:"]
-    lines += [f"- {p}" for p in photos]
-    lines += ["", context_text(note, profile), "", SYSTEM]
-    return "\n".join(lines)
+def cli_prompt(system: str, user_text: str, cli_preamble: str = "") -> str:
+    parts = [cli_preamble, user_text, system] if cli_preamble else [user_text, system]
+    return "\n\n".join(parts)
 
 
-def analyze_cli(photos: list[Path], note: str, profile: str, *, model: str, timeout: float,
-                runner: Runner = run_cli, which: Which = shutil.which) -> list[Suggestion]:
+def complete_cli(system: str, user_text: str, *, cli_preamble: str = "", cli_tools: Sequence[str] = (),
+                 wording: Wording, model: str, timeout: float,
+                 runner: Runner = run_cli, which: Which = shutil.which) -> str:
     exe = which("claude")
     if not exe:
         raise VisionError(503, NO_BACKEND)
-    args = [exe, "-p", "--output-format", "json", "--allowedTools", "Read", "--max-turns", "6"]
+    args = [exe, "-p", "--output-format", "json"]
+    if cli_tools:
+        args += ["--allowedTools", ",".join(cli_tools), "--max-turns", "6"]
+    else:
+        args += ["--max-turns", "1"]  # a plain answer; no tools, so one turn is all it may take
     if model:
         args += ["--model", model]
-    result = runner(args, build_prompt(photos, note, profile), timeout)
+    try:
+        result = runner(args, cli_prompt(system, user_text, cli_preamble), timeout)
+    except CliTimeout as exc:
+        raise _timeout_error(timeout, wording.timeout) from exc
     if result.returncode != 0:
         tail = (result.stderr.strip().splitlines() or result.stdout.strip().splitlines() or ["no details"])[-1]
         raise VisionError(502, f"Claude Code failed: {tail}")
@@ -233,16 +259,41 @@ def analyze_cli(photos: list[Path], note: str, profile: str, *, model: str, time
         raise VisionError(502, "Claude Code returned an unexpected shape; try again.")
     if envelope.get("is_error") or envelope.get("subtype", "success") != "success":
         raise VisionError(502, f"Claude Code reported an error: {envelope.get('result') or envelope.get('subtype')}")
-    return parse_suggestions(str(envelope.get("result") or ""))
+    return str(envelope.get("result") or "")
 
 
-# -- entry point ------------------------------------------------------------------------
+# -- shared entry point -----------------------------------------------------------------
+
+def complete(system: str, user_text: str, *, images: Sequence[Path] = (), cli_preamble: str = "",
+             cli_tools: Sequence[str] = (), wording: Wording, model: str, timeout: float,
+             api_key: str | None = None, make_client: Callable[..., object] = anthropic.Anthropic,
+             runner: Runner = run_cli, which: Which = shutil.which) -> str:
+    """Ask Claude for a text answer. API backend when `api_key` is given, otherwise the Claude Code CLI.
+    `images` go inline on the API; on the CLI the caller names them in `cli_preamble` and grants the
+    `Read` tool through `cli_tools`."""
+    if api_key:
+        return complete_api(system, user_text, images=images, wording=wording, model=model, timeout=timeout,
+                            api_key=api_key, make_client=make_client)
+    return complete_cli(system, user_text, cli_preamble=cli_preamble, cli_tools=cli_tools, wording=wording,
+                        model=model, timeout=timeout, runner=runner, which=which)
+
+
+# -- photos -----------------------------------------------------------------------------
+
+def photo_preamble(photos: list[Path]) -> str:
+    return "\n".join(["Use the Read tool to look at each of these photos:"] + [f"- {p}" for p in photos])
+
+
+def build_prompt(photos: list[Path], note: str, profile: str) -> str:
+    """The exact text the CLI backend receives for photos (kept for tests and debugging)."""
+    return cli_prompt(SYSTEM, context_text(note, profile), photo_preamble(photos))
+
 
 def analyze(photos: list[Path], note: str, profile: str, *, model: str, timeout: float,
             api_key: str | None = None, make_client: Callable[..., object] = anthropic.Anthropic,
             runner: Runner = run_cli, which: Which = shutil.which) -> list[Suggestion]:
-    """API backend when `api_key` is given, otherwise the Claude Code CLI."""
-    if api_key:
-        return analyze_api(photos, note, profile, model=model, timeout=timeout, api_key=api_key,
-                           make_client=make_client)
-    return analyze_cli(photos, note, profile, model=model, timeout=timeout, runner=runner, which=which)
+    """Photo suggestions: API backend when `api_key` is given, otherwise the Claude Code CLI."""
+    text = complete(SYSTEM, context_text(note, profile), images=photos, cli_preamble=photo_preamble(photos),
+                    cli_tools=("Read",), wording=PHOTO_WORDING, model=model, timeout=timeout, api_key=api_key,
+                    make_client=make_client, runner=runner, which=which)
+    return parse_suggestions(text)

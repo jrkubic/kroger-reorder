@@ -8,8 +8,8 @@ import anthropic
 import httpx2
 import pytest
 
-from kroger_reorder.vision import (SYSTEM, RunResult, VisionError, analyze, build_prompt, choose_backend,
-                                   context_text, parse_suggestions)
+from kroger_reorder.vision import (SYSTEM, CliTimeout, RunResult, VisionError, Wording, analyze, build_prompt,
+                                   choose_backend, complete, context_text, parse_suggestions)
 
 PHOTOS = [Path("C:/tmp/a.jpg"), Path("C:/tmp/b.jpg")]
 GOOD = [{"name": "whole milk", "quantity": 1, "kind": "seen", "reason": "Half a gallon left"},
@@ -253,3 +253,61 @@ def test_analyze_without_key_or_cli_explains_both_options():
         analyze(PHOTOS, "", "", model="m", timeout=5, runner=fake_runner(), which=lambda n: None)
     assert exc.value.status == 503
     assert "ANTHROPIC_API_KEY" in exc.value.message and "Claude Code" in exc.value.message
+
+
+# -- generic complete() -----------------------------------------------------------------
+
+WORDING = Wording(timeout="try a shorter page", refusal="Claude declined; try another page.",
+                  truncated="Claude's answer was cut off; try a shorter page.")
+
+
+def test_complete_cli_without_tools_passes_no_allowed_tools_and_one_turn():
+    run = fake_runner(stdout=envelope("[]"))
+    text = complete("SYS", "USER", wording=WORDING, model="m", timeout=5, runner=run, which=which_ok)
+    assert text == "[]"
+    (args, stdin_text, timeout), = run.calls
+    assert "--allowedTools" not in args
+    assert args[args.index("--max-turns") + 1] == "1"
+    assert stdin_text.startswith("USER") and stdin_text.rstrip().endswith("SYS")
+
+
+def test_complete_cli_with_tools_and_preamble():
+    run = fake_runner(stdout=envelope("[]"))
+    complete("SYS", "USER", cli_preamble="Read these files", cli_tools=("Read",), wording=WORDING,
+             model="m", timeout=5, runner=run, which=which_ok)
+    (args, stdin_text, _), = run.calls
+    assert args[args.index("--allowedTools") + 1] == "Read"
+    assert args[args.index("--max-turns") + 1] == "6"
+    assert stdin_text.startswith("Read these files")
+
+
+def test_complete_cli_timeout_uses_callers_wording():
+    def slow(args, stdin_text, timeout):
+        raise CliTimeout()
+    with pytest.raises(VisionError) as exc:
+        complete("SYS", "USER", wording=WORDING, model="m", timeout=9, runner=slow, which=which_ok)
+    assert exc.value.status == 504 and exc.value.message == "Claude took longer than 9 seconds; try a shorter page."
+
+
+def test_complete_api_without_images_sends_only_text():
+    make = fake_client(result=api_message("[]"))
+    text = complete("SYS", "USER", wording=WORDING, model="m", timeout=5, api_key="k", make_client=make)
+    assert text == "[]"
+    (call,) = make.calls
+    assert call["system"] == "SYS"
+    assert call["messages"] == [{"role": "user", "content": [{"type": "text", "text": "USER"}]}]
+
+
+def test_complete_api_refusal_and_truncation_use_callers_wording():
+    for stop, expected in (("refusal", "Claude declined; try another page."),
+                           ("max_tokens", "Claude's answer was cut off; try a shorter page.")):
+        make = fake_client(result=api_message("", stop_reason=stop))
+        with pytest.raises(VisionError) as exc:
+            complete("SYS", "USER", wording=WORDING, model="m", timeout=5, api_key="k", make_client=make)
+        assert exc.value.status == 502 and exc.value.message == expected
+
+
+def test_parse_suggestions_accepts_custom_kinds():
+    out = parse_suggestions(json.dumps([{"name": "flour", "kind": "staple"}, {"name": "milk", "kind": "seen"}]),
+                            kinds=("needed", "staple", "on_list"))
+    assert [(s.name, s.kind) for s in out] == [("flour", "staple"), ("milk", "needed")]
