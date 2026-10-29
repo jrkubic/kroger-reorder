@@ -122,10 +122,10 @@ def test_analyze_non_json_stdout_is_502():
 
 def test_analyze_timeout_bubbles_as_504():
     def slow(args, stdin_text, timeout):
-        raise VisionError(504, "too slow")
+        raise CliTimeout()
     with pytest.raises(VisionError) as exc:
         analyze(PHOTOS, "", "", model="m", timeout=5, runner=slow, which=which_ok)
-    assert exc.value.status == 504
+    assert exc.value.status == 504 and "fewer or smaller photos" in exc.value.message
 
 
 # -- API backend ----------------------------------------------------------------------
@@ -206,7 +206,8 @@ def test_analyze_api_sends_inline_images_and_parses_text(jpg_photos):
     (api_error(anthropic.BadRequestError, 400, "Error code: 400"), 502, "Error code: 400"),
     (anthropic.APIError("response validation broke", httpx2.Request("POST", "https://x"), body=None), 502,
      "validation broke"),
-    (anthropic.APITimeoutError(request=httpx2.Request("POST", "https://x")), 504, "longer than 42"),
+    (anthropic.APITimeoutError(request=httpx2.Request("POST", "https://x")), 504,
+     "longer than 42 seconds; try fewer or smaller photos"),
     (anthropic.APIConnectionError(request=httpx2.Request("POST", "https://x")), 502, "reach Anthropic"),
 ])
 def test_analyze_api_maps_sdk_errors(jpg_photos, error, status, needle):
@@ -267,6 +268,7 @@ def test_complete_cli_without_tools_passes_no_allowed_tools_and_one_turn():
     assert text == "[]"
     (args, stdin_text, timeout), = run.calls
     assert "--allowedTools" not in args
+    assert args[args.index("--tools") + 1] == ""
     assert args[args.index("--max-turns") + 1] == "1"
     assert stdin_text.startswith("USER") and stdin_text.rstrip().endswith("SYS")
 
@@ -298,13 +300,15 @@ def test_complete_api_without_images_sends_only_text():
     assert call["messages"] == [{"role": "user", "content": [{"type": "text", "text": "USER"}]}]
 
 
-def test_complete_api_refusal_and_truncation_use_callers_wording():
-    for stop, expected in (("refusal", "Claude declined; try another page."),
-                           ("max_tokens", "Claude's answer was cut off; try a shorter page.")):
-        make = fake_client(result=api_message("", stop_reason=stop))
-        with pytest.raises(VisionError) as exc:
-            complete("SYS", "USER", wording=WORDING, model="m", timeout=5, api_key="k", make_client=make)
-        assert exc.value.status == 502 and exc.value.message == expected
+@pytest.mark.parametrize("stop, expected", [
+    ("refusal", "Claude declined; try another page."),
+    ("max_tokens", "Claude's answer was cut off; try a shorter page."),
+])
+def test_complete_api_refusal_and_truncation_use_callers_wording(stop, expected):
+    make = fake_client(result=api_message("", stop_reason=stop))
+    with pytest.raises(VisionError) as exc:
+        complete("SYS", "USER", wording=WORDING, model="m", timeout=5, api_key="k", make_client=make)
+    assert exc.value.status == 502 and exc.value.message == expected
 
 
 def test_parse_suggestions_accepts_custom_kinds():

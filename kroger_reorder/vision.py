@@ -227,11 +227,10 @@ def run_cli(args: list[str], stdin_text: str, timeout: float) -> RunResult:
 
 
 def cli_prompt(system: str, user_text: str, cli_preamble: str = "") -> str:
-    parts = [cli_preamble, user_text, system] if cli_preamble else [user_text, system]
-    return "\n\n".join(parts)
+    return "\n\n".join(p for p in (cli_preamble, user_text, system) if p)
 
 
-def complete_cli(system: str, user_text: str, *, cli_preamble: str = "", cli_tools: Sequence[str] = (),
+def complete_cli(system: str, user_text: str, *, cli_preamble: str = "", cli_tools: tuple[str, ...] = (),
                  wording: Wording, model: str, timeout: float,
                  runner: Runner = run_cli, which: Which = shutil.which) -> str:
     exe = which("claude")
@@ -241,7 +240,9 @@ def complete_cli(system: str, user_text: str, *, cli_preamble: str = "", cli_too
     if cli_tools:
         args += ["--allowedTools", ",".join(cli_tools), "--max-turns", "6"]
     else:
-        args += ["--max-turns", "1"]  # a plain answer; no tools, so one turn is all it may take
+        # A plain answer. The CLI loads its default tool set even in -p mode, and a tool call would
+        # eat the only turn (subtype "error_max_turns"), so disable every tool explicitly.
+        args += ["--tools", "", "--max-turns", "1"]
     if model:
         args += ["--model", model]
     try:
@@ -265,7 +266,7 @@ def complete_cli(system: str, user_text: str, *, cli_preamble: str = "", cli_too
 # -- shared entry point -----------------------------------------------------------------
 
 def complete(system: str, user_text: str, *, images: Sequence[Path] = (), cli_preamble: str = "",
-             cli_tools: Sequence[str] = (), wording: Wording, model: str, timeout: float,
+             cli_tools: tuple[str, ...] = (), wording: Wording, model: str, timeout: float,
              api_key: str | None = None, make_client: Callable[..., object] = anthropic.Anthropic,
              runner: Runner = run_cli, which: Which = shutil.which) -> str:
     """Ask Claude for a text answer. API backend when `api_key` is given, otherwise the Claude Code CLI.
