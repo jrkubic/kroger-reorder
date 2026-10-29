@@ -3,8 +3,11 @@ import json
 import httpx
 import pytest
 
-from kroger_reorder.recipe import (BAD_URL, NO_RECIPE, NOT_HTML, TOO_LARGE, MAX_BYTES, RecipeError,
-                                   extract, fetch_page)
+from kroger_reorder.recipe import (BAD_URL, KINDS, NO_RECIPE, NOT_HTML, SYSTEM, TOO_LARGE, MAX_BYTES, Extracted,
+                                   RecipeError, extract, fetch_page, parse, suggest, user_text)
+from kroger_reorder.storage import Item
+from kroger_reorder.vision import CliTimeout, VisionError
+from tests.test_vision import api_message, envelope, fake_client, fake_runner, which_ok
 
 
 def transport(handler):
@@ -210,3 +213,65 @@ def test_extract_unescapes_html_entities_in_ingredients():
 def test_extract_reads_quantitative_value_yield():
     html = ld({**RECIPE, "recipeYield": {"@type": "QuantitativeValue", "value": 4}})
     assert extract(html).yield_ == "4"
+
+
+# -- prompt, parse, suggest ---------------------------------------------------------------
+
+EXTRACTED = Extracted("Chicken Tikka Masala", "4 servings", ["2 lbs chicken thighs", "1 cup yogurt"], "")
+ITEMS = [Item(upc="1", name="Large Eggs", size="12 ct", quantity=1), Item(upc="2", name="Whole Milk", size="1 gal", quantity=2)]
+
+
+def test_user_text_has_title_yield_ingredients_list_items_note_and_history():
+    text = user_text(EXTRACTED, "double it", "Weekly", ITEMS, "- Whole Milk: 5x")
+    for needle in ("Recipe: Chicken Tikka Masala", "Yield: 4 servings", "- 2 lbs chicken thighs", "- 1 cup yogurt",
+                   "Items already on the list 'Weekly':", "- Large Eggs ×1", "- Whole Milk ×2",
+                   "User's note: double it", "- Whole Milk: 5x"):
+        assert needle in text, needle
+
+
+def test_user_text_uses_page_text_and_empty_placeholder():
+    page = Extracted("Pancakes", "", [], "Ingredients 2 eggs 1 cup flour ...")
+    text = user_text(page, "", "Weekly", [], "")
+    assert "Ingredients:" not in text and "Ingredients 2 eggs 1 cup flour" in text
+    assert "(empty)" in text and "User's note: (none)" in text
+
+
+def test_system_prompt_names_the_three_kinds():
+    assert KINDS == ("needed", "staple", "on_list")
+    for kind in KINDS:
+        assert f'"{kind}"' in SYSTEM
+
+
+def test_parse_uses_recipe_kinds_and_defaults_to_needed():
+    out = parse(json.dumps([{"name": "chicken thighs", "quantity": 2, "kind": "needed", "reason": "r"},
+                            {"name": "salt", "kind": "staple"}, {"name": "eggs", "kind": "on_list"},
+                            {"name": "yogurt", "kind": "seen"}]))
+    assert [(s.name, s.quantity, s.kind) for s in out] == [
+        ("chicken thighs", 2, "needed"), ("salt", 1, "staple"), ("eggs", 1, "on_list"), ("yogurt", 1, "needed")]
+
+
+def test_suggest_api_sends_prompt_without_images():
+    make = fake_client(result=api_message(json.dumps([{"name": "chicken thighs", "kind": "needed"}])))
+    out = suggest(EXTRACTED, "", "Weekly", ITEMS, "", model="m", timeout=5, api_key="k", make_client=make)
+    assert [s.name for s in out] == ["chicken thighs"]
+    (call,) = make.calls
+    assert call["system"] == SYSTEM
+    (block,) = call["messages"][0]["content"]
+    assert block["type"] == "text" and "Large Eggs ×1" in block["text"]
+
+
+def test_suggest_cli_runs_without_tools():
+    run = fake_runner(stdout=envelope(json.dumps([{"name": "yogurt"}])))
+    out = suggest(EXTRACTED, "", "Weekly", ITEMS, "", model="m", timeout=5, runner=run, which=which_ok)
+    assert [s.name for s in out] == ["yogurt"]
+    (args, stdin_text, _), = run.calls
+    assert "--allowedTools" not in args and args[args.index("--tools") + 1] == ""
+    assert "Large Eggs ×1" in stdin_text and SYSTEM in stdin_text
+
+
+def test_suggest_timeout_mentions_recipe_page():
+    def slow(args, stdin_text, timeout):
+        raise CliTimeout()
+    with pytest.raises(VisionError) as exc:
+        suggest(EXTRACTED, "", "Weekly", [], "", model="m", timeout=30, runner=slow, which=which_ok)
+    assert exc.value.message == "Claude took longer than 30 seconds; try a shorter recipe page."

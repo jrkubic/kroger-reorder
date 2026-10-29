@@ -10,16 +10,20 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator
+import shutil
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlsplit
 
+import anthropic
 import httpx
 
-from .vision import VisionError
+from .storage import Item
+from .vision import (Runner, Suggestion, VisionError, Which, Wording, complete, context_text, parse_suggestions,
+                     run_cli)
 
 MAX_BYTES = 2 * 1024 * 1024
 TIMEOUT = 15.0
@@ -41,6 +45,27 @@ NOT_HTML = "That address isn't a web page. Paste the link to the recipe itself."
 TOO_LARGE = "That page is too large to read."
 NO_RECIPE = ("Couldn't find a recipe on that page. Try the recipe's own page rather than a search or "
              "category page.")
+
+KINDS = ("needed", "staple", "on_list")
+
+SYSTEM = """You turn a recipe's ingredient list into grocery store purchases for one household.
+
+Reply with ONLY a JSON array, no prose and no code fence. Each element:
+{"name": "<generic product name as you'd type into a grocery store search>", "quantity": <integer 1-10, number of store units to buy>, "kind": "needed" or "staple" or "on_list", "reason": "<one short sentence>"}
+
+Rules:
+- Combine lines that are the same product. Convert recipe amounts to store units: one carton of eggs, one bag of flour, one bunch of cilantro.
+- "on_list": the shopping list already has this product (or a close equivalent). Say what the list has, for example "already on your list: Large Eggs ×1".
+- "staple": salt, pepper, cooking oil, butter, flour, sugar, dried herbs and spices, vinegar, soy sauce, stock cubes, and similar things a kitchen keeps on hand, unless the note or the purchase history says the household is out.
+- "needed": everything else.
+- Honor the note: servings, substitutions, things to leave out, things the household already has.
+- Skip water, ice, and garnish-only items. At most 40 items. Do not repeat items."""
+
+RECIPE_WORDING = Wording(
+    timeout="try a shorter recipe page",
+    refusal="Claude declined to read that recipe; try a different page.",
+    truncated="Claude's answer was cut off; try a recipe with fewer ingredients.",
+)
 
 
 class RecipeError(VisionError):
@@ -195,3 +220,38 @@ def extract(html: str) -> Extracted:
     if len(text) < MIN_TEXT:
         raise RecipeError(422, NO_RECIPE)
     return Extracted(title, "", [], text)
+
+
+# -- suggest ----------------------------------------------------------------------------
+
+def list_text(list_name: str, items: Sequence[Item]) -> str:
+    lines = [f"- {item.name} ×{item.quantity}" for item in items] or ["(empty)"]
+    return "\n".join([f"Items already on the list '{list_name}':"] + lines)
+
+
+def user_text(page: Extracted, note: str, list_name: str, items: Sequence[Item], profile: str) -> str:
+    parts = [f"Recipe: {page.title or '(untitled)'}"]
+    if page.yield_:
+        parts.append(f"Yield: {page.yield_}")
+    if page.ingredients:
+        parts += ["", "Ingredients:"] + [f"- {line}" for line in page.ingredients]
+    else:
+        parts += ["", "The page has no structured ingredient list. Find the recipe's ingredients in this page text:",
+                  page.text]
+    parts += ["", list_text(list_name, items), "", context_text(note, profile)]
+    return "\n".join(parts)
+
+
+def parse(result_text: str) -> list[Suggestion]:
+    return parse_suggestions(result_text, kinds=KINDS)
+
+
+def suggest(page: Extracted, note: str, list_name: str, items: Sequence[Item], profile: str, *, model: str,
+            timeout: float, api_key: str | None = None,
+            make_client: Callable[..., object] = anthropic.Anthropic,
+            runner: Runner = run_cli, which: Which = shutil.which) -> list[Suggestion]:
+    """Grocery suggestions for a recipe: API backend when `api_key` is given, otherwise the Claude Code CLI."""
+    text = complete(SYSTEM, user_text(page, note, list_name, items, profile), wording=RECIPE_WORDING,
+                    model=model, timeout=timeout, api_key=api_key, make_client=make_client,
+                    runner=runner, which=which)
+    return parse(text)
