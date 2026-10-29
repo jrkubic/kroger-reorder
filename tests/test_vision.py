@@ -8,8 +8,8 @@ import anthropic
 import httpx2
 import pytest
 
-from kroger_reorder.vision import (SYSTEM, CliTimeout, RunResult, VisionError, Wording, analyze, build_prompt,
-                                   choose_backend, complete, context_text, parse_suggestions)
+from kroger_reorder.vision import (API_MAX_TOKENS, SYSTEM, CliTimeout, RunResult, VisionError, Wording, analyze,
+                                   build_prompt, choose_backend, complete, context_text, parse_suggestions)
 
 PHOTOS = [Path("C:/tmp/a.jpg"), Path("C:/tmp/b.jpg")]
 GOOD = [{"name": "whole milk", "quantity": 1, "kind": "seen", "reason": "Half a gallon left"},
@@ -185,7 +185,7 @@ def test_analyze_api_sends_inline_images_and_parses_text(jpg_photos):
     assert [s.name for s in out] == ["whole milk", "large eggs"]
     assert make.created == [{"api_key": "sk-test", "timeout": 42, "max_retries": 1}]
     (call,) = make.calls
-    assert call["model"] == "claude-opus-5-5" and call["max_tokens"] == 8192 and call["system"] == SYSTEM
+    assert call["model"] == "claude-opus-5-5" and call["max_tokens"] == API_MAX_TOKENS and call["system"] == SYSTEM
     (msg,) = call["messages"]
     assert msg["role"] == "user"
     images, (text,) = msg["content"][:2], msg["content"][2:]

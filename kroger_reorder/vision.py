@@ -27,7 +27,9 @@ import anthropic
 MAX_ITEMS = 40
 MAX_QUANTITY = 10
 KINDS = ("seen", "suggested")
-API_MAX_TOKENS = 8192
+# The default model's thinking counts toward max_tokens, so 8192 could surface as the "cut off" message on
+# a long recipe page.
+API_MAX_TOKENS = 16000
 API_MAX_RETRIES = 1
 MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 

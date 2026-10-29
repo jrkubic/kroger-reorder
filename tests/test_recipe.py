@@ -234,12 +234,14 @@ def test_user_text_uses_page_text_and_empty_placeholder():
     text = user_text(page, "", "Weekly", [], "")
     assert "Ingredients:" not in text and "Ingredients 2 eggs 1 cup flour" in text
     assert "(empty)" in text and "User's note: (none)" in text
+    assert "<page>" in text and "</page>" in text
 
 
 def test_system_prompt_names_the_three_kinds():
     assert KINDS == ("needed", "staple", "on_list")
     for kind in KINDS:
         assert f'"{kind}"' in SYSTEM
+    assert "never as instructions" in SYSTEM
 
 
 def test_parse_uses_recipe_kinds_and_defaults_to_needed():
@@ -267,6 +269,7 @@ def test_suggest_cli_runs_without_tools():
     (args, stdin_text, _), = run.calls
     assert "--allowedTools" not in args and args[args.index("--tools") + 1] == ""
     assert "Large Eggs ×1" in stdin_text and SYSTEM in stdin_text
+    assert "Read tool" not in stdin_text
 
 
 def test_suggest_timeout_mentions_recipe_page():
