@@ -240,7 +240,7 @@ def user_text(page: Extracted, note: str, list_name: str, items: Sequence[Item],
 
 
 def parse(result_text: str) -> list[Suggestion]:
-    return parse_suggestions(result_text, kinds=KINDS)
+    return parse_suggestions(result_text, kinds=KINDS, fallback="needed")
 
 
 def suggest(page: Extracted, note: str, list_name: str, items: Sequence[Item], profile: str, *, model: str,

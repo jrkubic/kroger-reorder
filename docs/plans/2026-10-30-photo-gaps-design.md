@@ -13,11 +13,13 @@ visible and one click adds anything Claude got wrong.
 ## Changes
 
 1. **Prompt** (`vision.SYSTEM`): the goal is gaps. Kinds become
-   `low` (visible but nearly gone), `missing` (not in the photos but expected: a regular purchase
-   from the history, something the photos imply, or something the note implies), `asked` (named in
-   the note), `on_list` (already on the shopping list; say what it has), and `stocked` (visible and
+   `low` (visible but nearly gone), `missing` (not in any photo but expected: a regular purchase
+   from the history that is due again, or something the photos imply), `asked` (named in the note
+   or clearly implied by it, such as a meal or a guest count), `on_list` (already on the shopping list; say what it has), and `stocked` (visible and
    plentiful; at most ten, the most notable, so the user can check what Claude saw). Order:
-   asked, low, missing, on_list, stocked. Other rules unchanged (plain names, no repeats, 40 max).
+   asked, low, missing, on_list, stocked. An item already on the list is `on_list` whatever the
+   photos or note say. An unknown kind falls back to `stocked` (Skip preselected). Other rules
+   unchanged (plain names, no repeats, 40 max).
 2. **Current list goes with the photos.** `POST /api/photo/suggest` takes the target list `slug`
    (the dialog already has the picker) and the route passes that list's name and items to the
    analyzer, exactly as the recipe route does. `vision.list_text()` is the shared formatter;

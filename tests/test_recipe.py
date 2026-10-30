@@ -247,7 +247,7 @@ def test_system_prompt_names_the_three_kinds():
 def test_parse_uses_recipe_kinds_and_defaults_to_needed():
     out = parse(json.dumps([{"name": "chicken thighs", "quantity": 2, "kind": "needed", "reason": "r"},
                             {"name": "salt", "kind": "staple"}, {"name": "eggs", "kind": "on_list"},
-                            {"name": "yogurt", "kind": "seen"}]))
+                            {"name": "yogurt", "kind": "weird"}]))
     assert [(s.name, s.quantity, s.kind) for s in out] == [
         ("chicken thighs", 2, "needed"), ("salt", 1, "staple"), ("eggs", 1, "on_list"), ("yogurt", 1, "needed")]
 

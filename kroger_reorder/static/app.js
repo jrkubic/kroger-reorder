@@ -376,8 +376,9 @@ function renderImport() {
   tbody.innerHTML = '';
   importRows.forEach((row, idx) => {
     const tr = document.createElement('tr');
-    // Recipe lines the list already covers, or pantry staples, start on Skip; one pick adds them anyway.
-    const skip = ['staple', 'on_list', 'stocked'].includes(row.kind);  // shown for transparency, not bought by default
+    // Rows the list already covers, pantry staples, and stocked items start on Skip: shown for
+    // transparency, not bought by default; one pick adds them anyway.
+    const skip = ['staple', 'on_list', 'stocked'].includes(row.kind);
     const options = row.candidates.map((c, ci) =>
       `<option value="${ci}" ${ci === 0 && !skip ? 'selected' : ''}>${c.fromFile ? 'From file: ' : ''}${esc(c.name)}${c.size ? ' · ' + esc(c.size) : ''}${c.price != null || c.promo != null ? ' · ' + money(c.promo ?? c.price) : ''}</option>`
     ).join('');

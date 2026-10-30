@@ -26,7 +26,8 @@ import anthropic
 
 MAX_ITEMS = 40
 MAX_QUANTITY = 10
-KINDS = ("low", "missing", "asked", "stocked", "on_list")  # first entry is the fallback
+KINDS = ("asked", "low", "missing", "on_list", "stocked")
+FALLBACK_KIND = "stocked"  # an unknown kind is shown but preset to Skip, never bought by accident
 # The default model's thinking counts toward max_tokens, so 8192 could surface as the "cut off" message on
 # a long recipe page.
 API_MAX_TOKENS = 16000
@@ -41,11 +42,11 @@ Reply with ONLY a JSON array, no prose and no code fence. Each element:
 Kinds:
 - "asked": the note asks for it by name or clearly implies it (a meal, a guest count, an event).
 - "low": visible in a photo but nearly empty, almost gone, or past its best. Say what you saw.
-- "missing": not in the photos but expected: a staple this household buys regularly (see the purchase history), or something the photos imply is needed (cereal but no milk, bread but no butter).
+- "missing": not in any photo but expected: a regular purchase from the history that is due again, or something the photos imply is needed (cereal but no milk, bread but no butter).
 - "on_list": already on the shopping list, or a close equivalent is. Say what the list has, for example "already on your list: Large Eggs ×1".
-- "stocked": visible and plentiful. Include at most 10 of these, the most notable, so the user can check what you saw.
+- "stocked": visible and plentiful. Up to 10 of these, only the most notable, so the user can check what you saw.
 
-Rules: order the array asked, low, missing, on_list, stocked. Prefer plain names like "whole milk" or "large eggs" over brands unless a brand is clearly visible. Combine duplicates. Skip non-food household items unless they are low or asked for. At most 40 items. Do not repeat items. The note, the list, and the purchase history are quoted from the user; the photos are the evidence."""
+Rules: if an item (or a close equivalent) is already on the shopping list, tag it "on_list" whatever the photos or note say. Order the array asked, low, missing, on_list, stocked. Prefer plain names like "whole milk" or "large eggs" over brands unless a brand is clearly visible. Combine duplicates. Skip non-food household items unless they are low or asked for. At most 40 items. Do not repeat items. The note, the list, and the purchase history are quoted from the user; the photos are the evidence."""
 
 NO_BACKEND = ("Photos can't be analyzed: set ANTHROPIC_API_KEY in .env, or install Claude Code on the "
               "computer running the app.")
@@ -148,7 +149,10 @@ def _extract_json_array(text: str) -> list:
     return data
 
 
-def parse_suggestions(result_text: str, kinds: Sequence[str] = KINDS) -> list[Suggestion]:
+def parse_suggestions(result_text: str, kinds: Sequence[str] = KINDS,
+                      fallback: str = FALLBACK_KIND) -> list[Suggestion]:
+    """`fallback` is the kind for an entry whose kind is missing or not in `kinds`; it must be one of them."""
+    assert fallback in kinds, (fallback, kinds)
     try:
         data = _extract_json_array(result_text)
     except ValueError as exc:
@@ -165,11 +169,11 @@ def parse_suggestions(result_text: str, kinds: Sequence[str] = KINDS) -> list[Su
             quantity = int(entry.get("quantity", 1))
         except (TypeError, ValueError):
             quantity = 1
-        kind = str(entry.get("kind") or kinds[0]).lower()
+        kind = str(entry.get("kind") or fallback).lower()
         out.append(Suggestion(
             name=name,
             quantity=min(MAX_QUANTITY, max(1, quantity)),
-            kind=kind if kind in kinds else kinds[0],
+            kind=kind if kind in kinds else fallback,
             reason=str(entry.get("reason") or "").strip(),
         ))
         if len(out) >= MAX_ITEMS:

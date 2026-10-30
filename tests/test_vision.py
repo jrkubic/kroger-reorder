@@ -50,7 +50,7 @@ def test_prompt_mentions_photos_note_and_history():
 
 
 def test_system_prompt_asks_for_gaps_and_names_every_kind():
-    assert KINDS == ("low", "missing", "asked", "stocked", "on_list")
+    assert KINDS == ("asked", "low", "missing", "on_list", "stocked")
     for kind in KINDS:
         assert f'"{kind}"' in SYSTEM
     assert "gaps" in SYSTEM and "not to inventory" in SYSTEM
@@ -72,7 +72,7 @@ def test_parse_good_output_clamps_and_tags():
 def test_parse_tolerates_fences_prose_bad_kinds_and_duplicates():
     text = 'Here you go:\n```json\n[{"name":"Milk","quantity":99,"kind":"weird"},{"name":"milk"},{"name":""},5]\n```'
     out = parse_suggestions(text)
-    assert [(s.name, s.quantity, s.kind) for s in out] == [("Milk", 10, "low")]
+    assert [(s.name, s.quantity, s.kind) for s in out] == [("Milk", 10, "stocked")]
 
 
 def test_parse_caps_item_count():
@@ -323,7 +323,12 @@ def test_complete_api_refusal_and_truncation_use_callers_wording(stop, expected)
     assert exc.value.status == 502 and exc.value.message == expected
 
 
+def test_parse_fallback_must_be_a_known_kind():
+    with pytest.raises(AssertionError):
+        parse_suggestions("[]", kinds=("a", "b"), fallback="c")
+
+
 def test_parse_suggestions_accepts_custom_kinds():
-    out = parse_suggestions(json.dumps([{"name": "flour", "kind": "staple"}, {"name": "milk", "kind": "seen"}]),
-                            kinds=("needed", "staple", "on_list"))
+    out = parse_suggestions(json.dumps([{"name": "flour", "kind": "staple"}, {"name": "milk", "kind": "weird"}]),
+                            kinds=("needed", "staple", "on_list"), fallback="needed")
     assert [(s.name, s.kind) for s in out] == [("flour", "staple"), ("milk", "needed")]
