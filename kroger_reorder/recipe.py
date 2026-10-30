@@ -55,7 +55,7 @@ Reply with ONLY a JSON array, no prose and no code fence. Each element:
 {"name": "<generic product name as you'd type into a grocery store search>", "quantity": <integer 1-10, number of store units to buy>, "kind": "needed" or "staple" or "on_list", "reason": "<one short sentence>", "group": "<optional short category when several rows are alternatives for one ingredient>"}
 
 Rules:
-- One row per specific product. Never answer with a category such as "fresh fruit" or "snacks": list each product you would actually buy as its own row and give those rows the same "group" so they appear together. Leave "group" empty for a single specific item.
+- One row per specific product. Never answer with a category such as "fresh fruit" or "snacks": list each product you would actually buy as its own row and give those rows the same "group" and keep them next to each other so they appear together. Leave "group" empty for a single specific item.
 - Combine lines that are the same product. Convert recipe amounts to store units: one carton of eggs, one bag of flour, one bunch of cilantro.
 - "on_list": the shopping list already has this product (or a close equivalent). Say what the list has, for example "already on your list: Large Eggs ×1".
 - "staple": salt, pepper, cooking oil, butter, flour, sugar, dried herbs and spices, vinegar, soy sauce, stock cubes, and similar things a kitchen keeps on hand, unless the note or the purchase history says the household is out.

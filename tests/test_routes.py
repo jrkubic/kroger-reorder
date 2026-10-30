@@ -746,7 +746,7 @@ def recipe_client(storage, kroger):
     def suggester(page, note, list_name, items, profile, *, model, timeout):
         calls["suggest"].append({"page": page, "note": note, "list_name": list_name, "items": list(items),
                                  "profile": profile, "model": model, "timeout": timeout})
-        return [Suggestion("chicken thighs", 2, "needed", "Two pounds"), Suggestion("large eggs", 1, "on_list", "already on your list: Eggs ×1")]
+        return [Suggestion("chicken thighs", 2, "needed", "Two pounds", "Protein"), Suggestion("large eggs", 1, "on_list", "already on your list: Eggs ×1")]
     app = create_app(storage, kroger, photo_model="test-model", photo_timeout=7, page_fetcher=fetch,
                      recipe_suggester=suggester)
     client = TestClient(app, follow_redirects=False)
@@ -761,7 +761,7 @@ def test_recipe_suggest_fetches_extracts_and_passes_list_items(recipe_client, st
     assert r.status_code == 200, r.text
     assert r.json()["title"] == "Tikka Masala"
     assert r.json()["lines"] == [
-        {"raw": "needed: Two pounds", "name": "chicken thighs", "quantity": 2, "exact": None, "kind": "needed", "reason": "Two pounds", "group": ""},
+        {"raw": "needed: Two pounds", "name": "chicken thighs", "quantity": 2, "exact": None, "kind": "needed", "reason": "Two pounds", "group": "Protein"},
         {"raw": "on_list: already on your list: Eggs ×1", "name": "large eggs", "quantity": 1, "exact": None, "kind": "on_list", "reason": "already on your list: Eggs ×1", "group": ""},
     ]
     assert recipe_client.calls["fetch"] == ["https://site.test/r"]

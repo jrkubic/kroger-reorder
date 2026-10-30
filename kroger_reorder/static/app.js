@@ -393,7 +393,7 @@ function renderRow(idx) {
   tr.dataset.importRow = idx;
   // Rows the list already covers, pantry staples, and stocked items start on Skip: shown for
   // transparency, not bought by default; one pick adds them anyway.
-  const skip = ['staple', 'on_list', 'stocked'].includes(row.kind);
+  const skip = !row.searched && ['staple', 'on_list', 'stocked'].includes(row.kind);
   const options = row.candidates.map((c, ci) =>
     `<option value="${ci}" ${ci === 0 && !skip ? 'selected' : ''}>${c.fromFile ? 'From file: ' : ''}${esc(c.name)}${c.size ? ' · ' + esc(c.size) : ''}${c.price != null || c.promo != null ? ' · ' + money(c.promo ?? c.price) : ''}</option>`
   ).join('');
@@ -424,11 +424,23 @@ function renderImport() {
   updateImportSummary();
 }
 
+// The quantity lives only in the row's input until the row is re-rendered; keep edits across a search.
+function rememberQty(idx) {
+  const input = $('import-table').querySelector(`[data-import-qty="${idx}"]`);
+  if (input) importRows[idx].quantity = Math.max(1, parseInt(input.value, 10) || 1);
+}
+
 // "Search for a different item…": the match cell becomes a search box for this row only.
 function startRowSearch(idx) {
   const cell = $('import-table').querySelector(`[data-import-pick="${idx}"]`).parentElement;
-  cell.innerHTML = `<div class="row"><input type="text" data-import-search="${idx}" placeholder="Search your store" value="${esc(importRows[idx].name)}"><button class="secondary" data-import-search-go="${idx}">Search</button></div>`;
+  cell.innerHTML = `<div class="row"><input type="text" data-import-search="${idx}" placeholder="Search your store" value="${esc(importRows[idx].name)}"><button class="secondary" data-import-search-go="${idx}">Search</button><button class="secondary" data-import-search-cancel="${idx}">Cancel</button></div>`;
   cell.querySelector('input').focus();
+  updateImportSummary();
+}
+
+function cancelRowSearch(idx) {
+  rememberQty(idx);
+  $('import-table').querySelector(`[data-import-row="${idx}"]`).replaceWith(renderRow(idx));
   updateImportSummary();
 }
 
@@ -441,8 +453,10 @@ async function runRowSearch(idx) {
   try {
     const { matches } = await api('POST', '/api/import/resolve', { names: [term] });
     const row = importRows[idx];
+    rememberQty(idx);
     row.name = term;
     row.candidates = matches[0].candidates;
+    row.searched = true;  // the user chose this match on purpose, so it starts on add whatever the kind
     $('import-table').querySelector(`[data-import-row="${idx}"]`).replaceWith(renderRow(idx));
     banner(row.candidates.length ? null : 'warn', row.candidates.length ? '' : `No match for “${term}” at your store.`, false, $('import-banner'));
     updateImportSummary();
@@ -478,12 +492,15 @@ $('import-table').addEventListener('change', (e) => {
   else updateImportSummary();
 });
 $('import-table').addEventListener('click', (e) => {
-  const idx = e.target.dataset.importSearchGo;
-  if (idx !== undefined) runRowSearch(parseInt(idx, 10));
+  const go = e.target.dataset.importSearchGo, cancel = e.target.dataset.importSearchCancel;
+  if (go !== undefined) runRowSearch(parseInt(go, 10));
+  else if (cancel !== undefined) cancelRowSearch(parseInt(cancel, 10));
 });
 $('import-table').addEventListener('keydown', (e) => {
   const idx = e.target.dataset.importSearch;
-  if (idx !== undefined && e.key === 'Enter') { e.preventDefault(); runRowSearch(parseInt(idx, 10)); }
+  if (idx === undefined) return;
+  if (e.key === 'Enter') { e.preventDefault(); runRowSearch(parseInt(idx, 10)); }
+  else if (e.key === 'Escape') { e.preventDefault(); cancelRowSearch(parseInt(idx, 10)); }
 });
 
 $('import-commit').onclick = async () => {
