@@ -237,6 +237,10 @@ def test_user_text_uses_page_text_and_empty_placeholder():
     assert "<page>" in text and "</page>" in text
 
 
+def test_system_prompt_demands_one_row_per_product_with_groups():
+    assert '"group"' in SYSTEM and "One row per specific product" in SYSTEM
+
+
 def test_system_prompt_names_the_three_kinds():
     assert KINDS == ("needed", "staple", "on_list")
     for kind in KINDS:

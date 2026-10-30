@@ -198,7 +198,7 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
 
     def suggestion_line(s) -> dict:
         return {"raw": f"{s.kind}: {s.reason}" if s.reason else s.kind, "name": s.name,
-                "quantity": s.quantity, "exact": None, "kind": s.kind, "reason": s.reason}
+                "quantity": s.quantity, "exact": None, "kind": s.kind, "reason": s.reason, "group": s.group}
 
     def rejected_upcs(exc: KrogerError, upcs: list[str]) -> list[str]:
         # Whole-token match so "1111041" is not flagged when Kroger rejects "0001111041700".

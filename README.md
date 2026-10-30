@@ -293,13 +293,13 @@ Click **Import**, then pick a file or paste text. Accepted shapes:
 - JSON: an array of strings, or of `{"name": ..., "quantity": ...}` objects.
 - A CSV exported from this app, or one of the app's own list files from `data/lists/`.
 
-Each line is matched against your store's catalog. Pick a different match or skip a line in the review table, then click **Add to list**. Items already in the list get their quantity bumped. Rows that carry a `upc` column are added exactly as they are, with no search, and show as "From file".
+Each line is matched against your store's catalog. Pick a different match or skip a line in the review table, or choose **Search for a different item…** in a row's dropdown to type a new search ("light cheese sticks") and re-match just that row, then click **Add to list**. Items already in the list get their quantity bumped. Rows that carry a `upc` column are added exactly as they are, with no search, and show as "From file".
 
 ### Photo suggestions
 
 Click **Photo**, choose which list the items should go to (or **New list…**), then add up to four photos. On a phone the picker offers both the camera and your photo library. Add a note if you like, such as "family of 4, out of eggs, taco night this week", and click **Suggest a list**.
 
-The photos are shrunk in the browser, sent to the computer running the app, and handed to the photo backend there (the Anthropic API or a local Claude Code install) together with your note and your usage profile. The items already on the chosen list go along too. After 10 to 30 seconds the import review table opens with every row tagged **asked** (from your note), **low** (visible but nearly gone), **missing** (not in the photos but expected from your history or implied by what is there), **on list** (already on the list; Skip is preselected), or **stocked** (plentiful, at most ten, so you can check what Claude saw; Skip is preselected), each with a one-line reason and a catalog match you can change or skip. **Add to list** works as for any import. Photos are deleted as soon as the analysis finishes and are never stored.
+The photos are shrunk in the browser, sent to the computer running the app, and handed to the photo backend there (the Anthropic API or a local Claude Code install) together with your note and your usage profile. The items already on the chosen list go along too. After 10 to 30 seconds the import review table opens with every row tagged **asked** (from your note), **low** (visible but nearly gone), **missing** (not in the photos but expected from your history or implied by what is there), **on list** (already on the list; Skip is preselected), or **stocked** (plentiful, at most ten, so you can check what Claude saw; Skip is preselected), each with a one-line reason and a catalog match you can change, search again, or skip. When several products would fill one need, Claude lists each as its own row under a group heading such as **Fresh fruit**, so you tick the ones you want. **Add to list** works as for any import. Photos are deleted as soon as the analysis finishes and are never stored.
 
 Requirements: an `ANTHROPIC_API_KEY` in `.env`, or [Claude Code](https://code.claude.com/docs) installed and signed in on the computer running the app; see [Optional: photo and recipe suggestions](#5-optional-photo-and-recipe-suggestions). `PHOTO_MODEL` and `PHOTO_TIMEOUT` in `.env` change the model (default `claude-opus-5-5`) and the time limit (default 90 seconds). The same requirements and settings apply to recipe suggestions below.
 
@@ -455,6 +455,7 @@ Run once after setup, or after changes that touch the Kroger client:
 | v5 Packaging and redeployment | [docs/plans/2026-10-28-packaging-design.md](docs/plans/2026-10-28-packaging-design.md) | [docs/plans/2026-10-28-packaging.md](docs/plans/2026-10-28-packaging.md) |
 | v6 Recipe URL suggestions | [docs/plans/2026-10-29-recipe-url-design.md](docs/plans/2026-10-29-recipe-url-design.md) | [docs/plans/2026-10-29-recipe-url.md](docs/plans/2026-10-29-recipe-url.md) |
 | v6.1 Photos find gaps | [docs/plans/2026-10-30-photo-gaps-design.md](docs/plans/2026-10-30-photo-gaps-design.md) | built directly from the design |
+| v6.2 Review groups and search | [docs/plans/2026-10-30-review-groups-search-design.md](docs/plans/2026-10-30-review-groups-search-design.md) | built directly from the design |
 
 ## Limitations
 
@@ -521,6 +522,7 @@ These come from Kroger's public API, not from the app:
 | 2026-10-28 | v5 | Package renamed to `kroger_reorder`, Anthropic API photo backend, `PUBLIC_URL` and `KROGER_REORDER_DATA`, Docker, CI on three OSes, lock file, clone-first setup docs |
 | 2026-10-29 | v6 | Recipe URL suggestions: paste a recipe link, Claude proposes the groceries, on-list and staple rows start on Skip |
 | 2026-10-30 | v6.1 | Photo suggestions look for gaps: low, missing, asked; stocked and on-list rows shown but preset to Skip; the current list is sent with the photos |
+| 2026-10-30 | v6.2 | Review table: Claude breaks categories into one row per product under a group heading; every row's dropdown can search the catalog for a different item |
 
 ## License
 

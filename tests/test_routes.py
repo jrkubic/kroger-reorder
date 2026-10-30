@@ -495,7 +495,7 @@ def analyzer_client(storage, kroger):
         calls.append({"paths": [p for p in paths], "exists": [p.exists() for p in paths], "note": note,
                       "list_name": list_name, "items": list(items), "profile": profile, "model": model,
                       "timeout": timeout})
-        return [Suggestion("whole milk", 1, "low", "Half left"), Suggestion("large eggs", 2, "stocked", "")]
+        return [Suggestion("whole milk", 1, "low", "Half left", "Dairy"), Suggestion("large eggs", 2, "stocked", "")]
     app = create_app(storage, kroger, photo_model="test-model", photo_timeout=7, analyzer=fake)
     client = TestClient(app, follow_redirects=False)
     client.calls = calls
@@ -508,8 +508,8 @@ def test_photo_suggest_writes_temp_files_passes_context_and_returns_lines(analyz
     r = analyzer_client.post("/api/photo/suggest", json=photo_body(n=2))
     assert r.status_code == 200
     assert r.json()["lines"] == [
-        {"raw": "low: Half left", "name": "whole milk", "quantity": 1, "exact": None, "kind": "low", "reason": "Half left"},
-        {"raw": "stocked", "name": "large eggs", "quantity": 2, "exact": None, "kind": "stocked", "reason": ""},
+        {"raw": "low: Half left", "name": "whole milk", "quantity": 1, "exact": None, "kind": "low", "reason": "Half left", "group": "Dairy"},
+        {"raw": "stocked", "name": "large eggs", "quantity": 2, "exact": None, "kind": "stocked", "reason": "", "group": ""},
     ]
     (call,) = analyzer_client.calls
     assert [p.suffix for p in call["paths"]] == [".png", ".png"] and call["exists"] == [True, True]
@@ -761,8 +761,8 @@ def test_recipe_suggest_fetches_extracts_and_passes_list_items(recipe_client, st
     assert r.status_code == 200, r.text
     assert r.json()["title"] == "Tikka Masala"
     assert r.json()["lines"] == [
-        {"raw": "needed: Two pounds", "name": "chicken thighs", "quantity": 2, "exact": None, "kind": "needed", "reason": "Two pounds"},
-        {"raw": "on_list: already on your list: Eggs ×1", "name": "large eggs", "quantity": 1, "exact": None, "kind": "on_list", "reason": "already on your list: Eggs ×1"},
+        {"raw": "needed: Two pounds", "name": "chicken thighs", "quantity": 2, "exact": None, "kind": "needed", "reason": "Two pounds", "group": ""},
+        {"raw": "on_list: already on your list: Eggs ×1", "name": "large eggs", "quantity": 1, "exact": None, "kind": "on_list", "reason": "already on your list: Eggs ×1", "group": ""},
     ]
     assert recipe_client.calls["fetch"] == ["https://site.test/r"]
     (call,) = recipe_client.calls["suggest"]

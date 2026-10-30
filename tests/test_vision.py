@@ -63,6 +63,16 @@ def test_prompt_placeholders_when_empty():
 
 # -- parsing ------------------------------------------------------------------------
 
+def test_parse_reads_group_and_trims_it():
+    out = parse_suggestions(json.dumps([{"name": "bananas", "group": "  Fresh fruit "}, {"name": "kiwi", "group": "x" * 80},
+                                        {"name": "milk"}]))
+    assert [s.group for s in out] == ["Fresh fruit", "x" * 40, ""]
+
+
+def test_system_prompt_demands_one_row_per_product_with_groups():
+    assert '"group"' in SYSTEM and "One row per specific product" in SYSTEM
+
+
 def test_parse_good_output_clamps_and_tags():
     out = parse_suggestions(json.dumps(GOOD))
     assert [(s.name, s.quantity, s.kind, s.reason) for s in out] == [

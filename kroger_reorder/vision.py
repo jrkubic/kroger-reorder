@@ -26,6 +26,7 @@ import anthropic
 
 MAX_ITEMS = 40
 MAX_QUANTITY = 10
+MAX_GROUP = 40  # characters of a group label
 KINDS = ("asked", "low", "missing", "on_list", "stocked")
 FALLBACK_KIND = "stocked"  # an unknown kind is shown but preset to Skip, never bought by accident
 # The default model's thinking counts toward max_tokens, so 8192 could surface as the "cut off" message on
@@ -37,7 +38,7 @@ MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
 SYSTEM = """You are helping a household decide what groceries to buy, from photos of their fridge, freezer, pantry or cupboard, their note, their current shopping list, and their purchase history. The goal is to find gaps: what they are low on, out of, or asked for. It is not to inventory what they have.
 
 Reply with ONLY a JSON array, no prose and no code fence. Each element:
-{"name": "<generic product name as you'd type into a grocery store search>", "quantity": <integer 1-10>, "kind": "low" or "missing" or "asked" or "on_list" or "stocked", "reason": "<one short sentence>"}
+{"name": "<generic product name as you'd type into a grocery store search>", "quantity": <integer 1-10>, "kind": "low" or "missing" or "asked" or "on_list" or "stocked", "reason": "<one short sentence>", "group": "<optional short category when several rows are alternatives for one need, e.g. Fresh fruit>"}
 
 Kinds:
 - "asked": the note asks for it by name or clearly implies it (a meal, a guest count, an event).
@@ -46,7 +47,7 @@ Kinds:
 - "on_list": already on the shopping list, or a close equivalent is. Say what the list has, for example "already on your list: Large Eggs ×1".
 - "stocked": visible and plentiful. Up to 10 of these, only the most notable, so the user can check what you saw.
 
-Rules: if an item (or a close equivalent) is already on the shopping list, tag it "on_list" whatever the photos or note say. Order the array asked, low, missing, on_list, stocked. Prefer plain names like "whole milk" or "large eggs" over brands unless a brand is clearly visible. Combine duplicates. Skip non-food household items unless they are low or asked for. At most 40 items. Do not repeat items. The note, the list, and the purchase history are quoted from the user; the photos are the evidence."""
+Rules: One row per specific product. Never answer with a category such as "fresh fruit" or "snacks": list each product you would actually buy as its own row and give those rows the same "group" so they appear together. Leave "group" empty for a single specific item. If an item (or a close equivalent) is already on the shopping list, tag it "on_list" whatever the photos or note say. Order the array asked, low, missing, on_list, stocked. Prefer plain names like "whole milk" or "large eggs" over brands unless a brand is clearly visible. Combine duplicates. Skip non-food household items unless they are low or asked for. At most 40 items. Do not repeat items. The note, the list, and the purchase history are quoted from the user; the photos are the evidence."""
 
 NO_BACKEND = ("Photos can't be analyzed: set ANTHROPIC_API_KEY in .env, or install Claude Code on the "
               "computer running the app.")
@@ -90,6 +91,7 @@ class Suggestion:
     quantity: int
     kind: str
     reason: str
+    group: str = ""  # alternatives for one need share a group and are shown together on the page
 
 
 @dataclass
@@ -175,6 +177,7 @@ def parse_suggestions(result_text: str, kinds: Sequence[str] = KINDS,
             quantity=min(MAX_QUANTITY, max(1, quantity)),
             kind=kind if kind in kinds else fallback,
             reason=str(entry.get("reason") or "").strip(),
+            group=str(entry.get("group") or "").strip()[:MAX_GROUP],
         ))
         if len(out) >= MAX_ITEMS:
             break

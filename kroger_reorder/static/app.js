@@ -6,7 +6,7 @@ const STALE_MS = 24 * 60 * 60 * 1000;
 
 let state = { store: null, signed_in: false, lists: [], active_list: null, name: '', items: [], warning: null,
               photo_backend: null, public_url: null };
-let importRows = [];  // [{raw, name, quantity, candidates, kind?, reason?}]  (kind/reason only from Photo and Recipe)
+let importRows = [];  // [{raw, name, quantity, candidates, kind?, reason?, group?}]  (kind/reason/group only from Photo and Recipe)
 let orders = [];        // from GET /api/orders, newest first
 let openOrderId = null; // which order row is expanded
 
@@ -350,11 +350,25 @@ async function reviewLines(lines, bannerEl) {
     ({ matches } = await api('POST', '/api/import/resolve', { names: toResolve.map(l => l.name) }));
   }
   let next = 0;
-  importRows = lines.map(l => l.exact
+  importRows = groupTogether(lines.map(l => l.exact
     ? { ...l, candidates: [{ ...l.exact, name: l.name, fromFile: true }] }
-    : { ...l, candidates: matches[next++].candidates });
+    : { ...l, candidates: matches[next++].candidates }));
   banner(null, '', false, bannerEl);
   renderImport();
+}
+
+// Rows that share a group (Claude's alternatives for one need, e.g. "Fresh fruit") sit together, in
+// order of first appearance; everything else keeps its order.
+function groupTogether(rows) {
+  const out = [], placed = new Set();
+  rows.forEach((row, i) => {
+    if (placed.has(i)) return;
+    out.push(row); placed.add(i);
+    if (row.group) rows.forEach((other, j) => {
+      if (!placed.has(j) && other.group === row.group) { out.push(other); placed.add(j); }
+    });
+  });
+  return out;
 }
 
 $('import-parse').onclick = async () => {
@@ -371,32 +385,78 @@ $('import-parse').onclick = async () => {
   }
 };
 
+const SEARCH_PICK = '-2';  // the select value that turns a row into a catalog search box
+
+function renderRow(idx) {
+  const row = importRows[idx];
+  const tr = document.createElement('tr');
+  tr.dataset.importRow = idx;
+  // Rows the list already covers, pantry staples, and stocked items start on Skip: shown for
+  // transparency, not bought by default; one pick adds them anyway.
+  const skip = ['staple', 'on_list', 'stocked'].includes(row.kind);
+  const options = row.candidates.map((c, ci) =>
+    `<option value="${ci}" ${ci === 0 && !skip ? 'selected' : ''}>${c.fromFile ? 'From file: ' : ''}${esc(c.name)}${c.size ? ' · ' + esc(c.size) : ''}${c.price != null || c.promo != null ? ' · ' + money(c.promo ?? c.price) : ''}</option>`
+  ).join('');
+  const kind = row.kind ? `<span class="kind ${esc(row.kind)}">${esc(row.kind.replace('_', ' '))}</span>` : '';
+  const sub = row.kind ? (row.reason || '') : row.raw;
+  tr.innerHTML = `
+    <td><div>${kind}${esc(row.name)}</div><div class="raw">${esc(sub)}</div></td>
+    <td><input type="number" min="1" value="${row.quantity}" data-import-qty="${idx}"></td>
+    <td><select data-import-pick="${idx}">${options}<option value="-1" ${row.candidates.length && !skip ? '' : 'selected'}>${row.candidates.length ? 'Skip this line' : 'No match found — skip'}</option><option value="${SEARCH_PICK}">Search for a different item…</option></select></td>`;
+  return tr;
+}
+
 function renderImport() {
   const tbody = $('import-table').querySelector('tbody');
   tbody.innerHTML = '';
+  let lastGroup = null;
   importRows.forEach((row, idx) => {
-    const tr = document.createElement('tr');
-    // Rows the list already covers, pantry staples, and stocked items start on Skip: shown for
-    // transparency, not bought by default; one pick adds them anyway.
-    const skip = ['staple', 'on_list', 'stocked'].includes(row.kind);
-    const options = row.candidates.map((c, ci) =>
-      `<option value="${ci}" ${ci === 0 && !skip ? 'selected' : ''}>${c.fromFile ? 'From file: ' : ''}${esc(c.name)}${c.size ? ' · ' + esc(c.size) : ''}${c.price != null || c.promo != null ? ' · ' + money(c.promo ?? c.price) : ''}</option>`
-    ).join('');
-    const kind = row.kind ? `<span class="kind ${esc(row.kind)}">${esc(row.kind.replace('_', ' '))}</span>` : '';
-    const sub = row.kind ? (row.reason || '') : row.raw;
-    tr.innerHTML = `
-      <td><div>${kind}${esc(row.name)}</div><div class="raw">${esc(sub)}</div></td>
-      <td><input type="number" min="1" value="${row.quantity}" data-import-qty="${idx}"></td>
-      <td><select data-import-pick="${idx}">${options}<option value="-1" ${row.candidates.length && !skip ? '' : 'selected'}>${row.candidates.length ? 'Skip this line' : 'No match found — skip'}</option></select></td>`;
-    tbody.appendChild(tr);
+    if (row.group && row.group !== lastGroup) {
+      const heading = document.createElement('tr');
+      heading.className = 'group';
+      heading.innerHTML = `<td colspan="3">${esc(row.group)}</td>`;
+      tbody.appendChild(heading);
+    }
+    lastGroup = row.group || null;
+    tbody.appendChild(renderRow(idx));
   });
   $('import-review').classList.remove('hidden');
   updateImportSummary();
 }
 
+// "Search for a different item…": the match cell becomes a search box for this row only.
+function startRowSearch(idx) {
+  const cell = $('import-table').querySelector(`[data-import-pick="${idx}"]`).parentElement;
+  cell.innerHTML = `<div class="row"><input type="text" data-import-search="${idx}" placeholder="Search your store" value="${esc(importRows[idx].name)}"><button class="secondary" data-import-search-go="${idx}">Search</button></div>`;
+  cell.querySelector('input').focus();
+  updateImportSummary();
+}
+
+async function runRowSearch(idx) {
+  const input = $('import-table').querySelector(`[data-import-search="${idx}"]`);
+  const term = input.value.trim();
+  if (!term) return;
+  const button = $('import-table').querySelector(`[data-import-search-go="${idx}"]`);
+  input.disabled = button.disabled = true;
+  try {
+    const { matches } = await api('POST', '/api/import/resolve', { names: [term] });
+    const row = importRows[idx];
+    row.name = term;
+    row.candidates = matches[0].candidates;
+    $('import-table').querySelector(`[data-import-row="${idx}"]`).replaceWith(renderRow(idx));
+    banner(row.candidates.length ? null : 'warn', row.candidates.length ? '' : `No match for “${term}” at your store.`, false, $('import-banner'));
+    updateImportSummary();
+  } catch (e) {
+    input.disabled = button.disabled = false;
+    banner('error', e.message, false, $('import-banner'));
+  }
+}
+
 function importPicks() {
   return importRows.map((row, idx) => {
-    const pick = parseInt($('import-table').querySelector(`[data-import-pick="${idx}"]`).value, 10);
+    const select = $('import-table').querySelector(`[data-import-pick="${idx}"]`);
+    if (!select) return null;  // the row is in search mode
+    const pick = parseInt(select.value, 10);
     const qty = Math.max(1, parseInt($('import-table').querySelector(`[data-import-qty="${idx}"]`).value || '1', 10) || 1);
     if (pick < 0) return null;
     const c = row.candidates[pick];
@@ -412,7 +472,19 @@ function updateImportSummary() {
   $('import-summary').textContent = `${n} of ${importRows.length} line${importRows.length === 1 ? '' : 's'} will be added`;
 }
 
-$('import-table').addEventListener('change', updateImportSummary);
+$('import-table').addEventListener('change', (e) => {
+  const idx = e.target.dataset.importPick;
+  if (idx !== undefined && e.target.value === SEARCH_PICK) startRowSearch(parseInt(idx, 10));
+  else updateImportSummary();
+});
+$('import-table').addEventListener('click', (e) => {
+  const idx = e.target.dataset.importSearchGo;
+  if (idx !== undefined) runRowSearch(parseInt(idx, 10));
+});
+$('import-table').addEventListener('keydown', (e) => {
+  const idx = e.target.dataset.importSearch;
+  if (idx !== undefined && e.key === 'Enter') { e.preventDefault(); runRowSearch(parseInt(idx, 10)); }
+});
 
 $('import-commit').onclick = async () => {
   $('import-commit').disabled = true;
