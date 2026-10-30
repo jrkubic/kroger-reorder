@@ -90,6 +90,7 @@ class Photo(BaseModel):
 
 class PhotoRequest(BaseModel):
     photos: list[Photo]
+    slug: str  # the list the items will go to; its contents are sent with the photos
     note: str = ""
 
 
@@ -445,6 +446,7 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
 
     @app.post("/api/photo/suggest")
     def photo_suggest(body: PhotoRequest):
+        loaded = get_list(body.slug)  # 404 before any decoding or network
         if not body.photos:
             return error(400, "Add at least one photo.")
         if len(body.photos) > MAX_PHOTOS:
@@ -471,7 +473,8 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
                 path = Path(tmp) / f"photo-{n}{ext}"
                 path.write_bytes(raw)
                 paths.append(path)
-            suggestions = analyzer(paths, body.note, profile, model=photo_model, timeout=photo_timeout)
+            suggestions = analyzer(paths, body.note, loaded.name, loaded.items, profile,
+                                   model=photo_model, timeout=photo_timeout)
         lines = [suggestion_line(s) for s in suggestions]
         if not lines:
             return error(422, "Claude couldn't find any groceries in those photos. Try a clearer or closer shot.")

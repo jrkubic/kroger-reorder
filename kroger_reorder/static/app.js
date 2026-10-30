@@ -377,7 +377,7 @@ function renderImport() {
   importRows.forEach((row, idx) => {
     const tr = document.createElement('tr');
     // Recipe lines the list already covers, or pantry staples, start on Skip; one pick adds them anyway.
-    const skip = row.kind === 'staple' || row.kind === 'on_list';
+    const skip = ['staple', 'on_list', 'stocked'].includes(row.kind);  // shown for transparency, not bought by default
     const options = row.candidates.map((c, ci) =>
       `<option value="${ci}" ${ci === 0 && !skip ? 'selected' : ''}>${c.fromFile ? 'From file: ' : ''}${esc(c.name)}${c.size ? ' · ' + esc(c.size) : ''}${c.price != null || c.promo != null ? ' · ' + money(c.promo ?? c.price) : ''}</option>`
     ).join('');
@@ -528,6 +528,7 @@ $('photo-go').onclick = async () => {
     banner('warn', 'Claude is looking at your photos… this takes 10 to 30 seconds.', false, pbanner);
     const { lines } = await api('POST', '/api/photo/suggest', {
       photos: photoFiles.map(({ media_type, data }) => ({ media_type, data })),
+      slug,
       note: $('photo-note').value,
     });
     if (slug !== state.active_list) await switchList(slug);

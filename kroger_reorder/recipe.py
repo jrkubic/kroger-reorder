@@ -22,7 +22,8 @@ import anthropic
 import httpx
 
 from .storage import Item
-from .vision import (Runner, Suggestion, VisionError, Which, Wording, complete, context_text, parse_suggestions,
+from .vision import (Runner, Suggestion, VisionError, Which, Wording, complete, context_text, list_text,
+                     parse_suggestions,
                      run_cli)
 
 MAX_BYTES = 2 * 1024 * 1024
@@ -224,11 +225,6 @@ def extract(html: str) -> Extracted:
 
 
 # -- suggest ----------------------------------------------------------------------------
-
-def list_text(list_name: str, items: Sequence[Item]) -> str:
-    lines = [f"- {item.name} ×{item.quantity}" for item in items] or ["(empty)"]
-    return "\n".join([f"Items already on the list '{list_name}':"] + lines)
-
 
 def user_text(page: Extracted, note: str, list_name: str, items: Sequence[Item], profile: str) -> str:
     parts = [f"Recipe: {page.title or '(untitled)'}"]

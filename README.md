@@ -62,7 +62,7 @@ Or with Docker: `docker compose up -d`. Full details, including registering the 
 - **Order history.** Every successful send is recorded with date, list, items, and an estimated total. Any past order can be sent to the cart again or deleted.
 - **Import.** Plain text, Markdown checklists, CSV, TSV from a spreadsheet, JSON, or the app's own export. Reviewed in a table before adding.
 - **Export.** Download any list as CSV. Re-importing it recreates the list exactly, on this or another install.
-- **Photo suggestions.** Photograph your fridge, pantry or cupboard from any device on the wifi, add a note, and Claude proposes a list: what it sees, what looks low or missing, and what your note asks for. Every line is reviewed against the store catalog before it is added. Works through your own Anthropic API key, or through Claude Code installed on the host.
+- **Photo suggestions.** Photograph your fridge, pantry or cupboard from any device on the wifi, add a note, and Claude looks for gaps: what is low, what is missing given your purchase history, and what your note asks for. What is already stocked or on the list is shown too, preset to Skip. Every line is reviewed against the store catalog before it is added. Works through your own Anthropic API key, or through Claude Code installed on the host.
 - **Recipe suggestions.** Paste the link to a recipe and Claude turns its ingredient list into store purchases, flagging what the chosen list already has and the pantry staples a kitchen keeps (both preset to Skip). Same backends and review step as photos.
 - **Usage profile.** Derived from order history: how often you buy each item, the usual quantity, and when it is due again. Shown on the Orders tab and used to make photo suggestions smarter over time.
 - **Phone access.** The server binds to your LAN. Sign in once on the PC and every device shares it.
@@ -299,7 +299,7 @@ Each line is matched against your store's catalog. Pick a different match or ski
 
 Click **Photo**, choose which list the items should go to (or **New list…**), then add up to four photos. On a phone the picker offers both the camera and your photo library. Add a note if you like, such as "family of 4, out of eggs, taco night this week", and click **Suggest a list**.
 
-The photos are shrunk in the browser, sent to the computer running the app, and handed to the photo backend there (the Anthropic API or a local Claude Code install) together with your note and your usage profile. After 10 to 30 seconds the import review table opens with every suggestion tagged **seen** (visible in a photo) or **suggested** (looks empty, low, absent, overdue by your history, or asked for in the note), each with a one-line reason and a catalog match you can change or skip. **Add to list** works as for any import. Photos are deleted as soon as the analysis finishes and are never stored.
+The photos are shrunk in the browser, sent to the computer running the app, and handed to the photo backend there (the Anthropic API or a local Claude Code install) together with your note and your usage profile. The items already on the chosen list go along too. After 10 to 30 seconds the import review table opens with every row tagged **asked** (from your note), **low** (visible but nearly gone), **missing** (not in the photos but expected from your history or implied by what is there), **on list** (already on the list; Skip is preselected), or **stocked** (plentiful, at most ten, so you can check what Claude saw; Skip is preselected), each with a one-line reason and a catalog match you can change or skip. **Add to list** works as for any import. Photos are deleted as soon as the analysis finishes and are never stored.
 
 Requirements: an `ANTHROPIC_API_KEY` in `.env`, or [Claude Code](https://code.claude.com/docs) installed and signed in on the computer running the app; see [Optional: photo and recipe suggestions](#5-optional-photo-and-recipe-suggestions). `PHOTO_MODEL` and `PHOTO_TIMEOUT` in `.env` change the model (default `claude-opus-5-5`) and the time limit (default 90 seconds). The same requirements and settings apply to recipe suggestions below.
 
@@ -387,7 +387,7 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/api/photo/suggest` | Base64 photos plus a note; returns suggested lines for the import review |
+| `POST` | `/api/photo/suggest` | Base64 photos, the target list slug, and a note; returns suggested lines for the import review |
 | `POST` | `/api/recipe/suggest` | A recipe URL, the target list slug, and a note; returns the recipe title and suggested lines for the import review |
 | `GET` | `/api/usage` | Usage profile derived from order history |
 
@@ -454,6 +454,7 @@ Run once after setup, or after changes that touch the Kroger client:
 | v4 Photo suggestions | [docs/plans/2026-10-26-photo-suggest-design.md](docs/plans/2026-10-26-photo-suggest-design.md) | built directly from the design |
 | v5 Packaging and redeployment | [docs/plans/2026-10-28-packaging-design.md](docs/plans/2026-10-28-packaging-design.md) | [docs/plans/2026-10-28-packaging.md](docs/plans/2026-10-28-packaging.md) |
 | v6 Recipe URL suggestions | [docs/plans/2026-10-29-recipe-url-design.md](docs/plans/2026-10-29-recipe-url-design.md) | [docs/plans/2026-10-29-recipe-url.md](docs/plans/2026-10-29-recipe-url.md) |
+| v6.1 Photos find gaps | [docs/plans/2026-10-30-photo-gaps-design.md](docs/plans/2026-10-30-photo-gaps-design.md) | built directly from the design |
 
 ## Limitations
 
@@ -519,6 +520,7 @@ These come from Kroger's public API, not from the app:
 | 2026-10-26 | v4 | Photo suggestions through headless Claude Code, usage profile from order history |
 | 2026-10-28 | v5 | Package renamed to `kroger_reorder`, Anthropic API photo backend, `PUBLIC_URL` and `KROGER_REORDER_DATA`, Docker, CI on three OSes, lock file, clone-first setup docs |
 | 2026-10-29 | v6 | Recipe URL suggestions: paste a recipe link, Claude proposes the groceries, on-list and staple rows start on Skip |
+| 2026-10-30 | v6.1 | Photo suggestions look for gaps: low, missing, asked; stocked and on-list rows shown but preset to Skip; the current list is sent with the photos |
 
 ## License
 

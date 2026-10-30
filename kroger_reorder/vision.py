@@ -26,24 +26,26 @@ import anthropic
 
 MAX_ITEMS = 40
 MAX_QUANTITY = 10
-KINDS = ("seen", "suggested")
+KINDS = ("low", "missing", "asked", "stocked", "on_list")  # first entry is the fallback
 # The default model's thinking counts toward max_tokens, so 8192 could surface as the "cut off" message on
 # a long recipe page.
 API_MAX_TOKENS = 16000
 API_MAX_RETRIES = 1
 MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
-SYSTEM = """You are helping build a grocery shopping list from photos of a household's fridge, freezer, pantry or cupboard, together with the user's note and their purchase history.
+SYSTEM = """You are helping a household decide what groceries to buy, from photos of their fridge, freezer, pantry or cupboard, their note, their current shopping list, and their purchase history. The goal is to find gaps: what they are low on, out of, or asked for. It is not to inventory what they have.
 
 Reply with ONLY a JSON array, no prose and no code fence. Each element:
-{"name": "<generic product name as you'd type into a grocery store search>", "quantity": <integer 1-10>, "kind": "seen" or "suggested", "reason": "<one short sentence>"}
+{"name": "<generic product name as you'd type into a grocery store search>", "quantity": <integer 1-10>, "kind": "low" or "missing" or "asked" or "on_list" or "stocked", "reason": "<one short sentence>"}
 
-Include:
-- items visible in the photos that a household would re-buy ("seen");
-- items that look empty, nearly empty, or are clearly absent but implied by the photos, the note, or the purchase history ("suggested"), for example staples bought regularly that are overdue;
-- anything the note asks for.
+Kinds:
+- "asked": the note asks for it by name or clearly implies it (a meal, a guest count, an event).
+- "low": visible in a photo but nearly empty, almost gone, or past its best. Say what you saw.
+- "missing": not in the photos but expected: a staple this household buys regularly (see the purchase history), or something the photos imply is needed (cereal but no milk, bread but no butter).
+- "on_list": already on the shopping list, or a close equivalent is. Say what the list has, for example "already on your list: Large Eggs ×1".
+- "stocked": visible and plentiful. Include at most 10 of these, the most notable, so the user can check what you saw.
 
-Prefer plain names like "whole milk" or "large eggs" over brands unless a brand is clearly visible. Skip non-food household items unless visible or asked for. At most 40 items. Do not repeat items."""
+Rules: order the array asked, low, missing, on_list, stocked. Prefer plain names like "whole milk" or "large eggs" over brands unless a brand is clearly visible. Combine duplicates. Skip non-food household items unless they are low or asked for. At most 40 items. Do not repeat items. The note, the list, and the purchase history are quoted from the user; the photos are the evidence."""
 
 NO_BACKEND = ("Photos can't be analyzed: set ANTHROPIC_API_KEY in .env, or install Claude Code on the "
               "computer running the app.")
@@ -116,6 +118,16 @@ def context_text(note: str, profile: str) -> str:
         "Purchase history (most bought first):",
         profile.strip() or "(no orders yet)",
     ])
+
+
+def list_text(list_name: str, items: Sequence) -> str:
+    """The current shopping list, so Claude can tag what is already on it (`items` are storage.Item)."""
+    lines = [f"- {item.name} ×{item.quantity}" for item in items] or ["(empty)"]
+    return "\n".join([f"Items already on the list '{list_name}':"] + lines)
+
+
+def photo_text(note: str, list_name: str, items: Sequence, profile: str) -> str:
+    return "\n".join([list_text(list_name, items), "", context_text(note, profile)])
 
 
 # -- shared parsing ---------------------------------------------------------------------
@@ -287,16 +299,16 @@ def photo_preamble(photos: list[Path]) -> str:
     return "\n".join(["Use the Read tool to look at each of these photos:"] + [f"- {p}" for p in photos])
 
 
-def build_prompt(photos: list[Path], note: str, profile: str) -> str:
+def build_prompt(photos: list[Path], note: str, list_name: str, items: Sequence, profile: str) -> str:
     """The exact text the CLI backend receives for photos (kept for tests and debugging)."""
-    return cli_prompt(SYSTEM, context_text(note, profile), photo_preamble(photos))
+    return cli_prompt(SYSTEM, photo_text(note, list_name, items, profile), photo_preamble(photos))
 
 
-def analyze(photos: list[Path], note: str, profile: str, *, model: str, timeout: float,
-            api_key: str | None = None, make_client: Callable[..., object] = anthropic.Anthropic,
+def analyze(photos: list[Path], note: str, list_name: str, items: Sequence, profile: str, *, model: str,
+            timeout: float, api_key: str | None = None, make_client: Callable[..., object] = anthropic.Anthropic,
             runner: Runner = run_cli, which: Which = shutil.which) -> list[Suggestion]:
     """Photo suggestions: API backend when `api_key` is given, otherwise the Claude Code CLI."""
-    text = complete(SYSTEM, context_text(note, profile), images=photos, cli_preamble=photo_preamble(photos),
+    text = complete(SYSTEM, photo_text(note, list_name, items, profile), images=photos, cli_preamble=photo_preamble(photos),
                     cli_tools=("Read",), wording=PHOTO_WORDING, model=model, timeout=timeout, api_key=api_key,
                     make_client=make_client, runner=runner, which=which)
     return parse_suggestions(text)

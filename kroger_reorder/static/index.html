@@ -76,9 +76,9 @@
   .thumbs { display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 0; }
   .thumbs img { width:88px; height:88px; object-fit:cover; border-radius:8px; border:1px solid var(--line); }
   .kind { font-size:.75rem; border-radius:999px; padding:2px 8px; margin-right:6px; vertical-align:middle; }
-  .kind.seen, .kind.needed { background:#e4f5ea; color:var(--ok); }
-  .kind.suggested { background:#fff4d6; color:#7a5300; }
-  .kind.staple { background:#eef0f3; color:#555; }
+  .kind.needed, .kind.asked { background:#e4f5ea; color:var(--ok); }
+  .kind.low, .kind.missing { background:#fff4d6; color:#7a5300; }
+  .kind.staple, .kind.stocked { background:#eef0f3; color:#555; }
   .kind.on_list { background:#e8ecff; color:#2b3fa8; }
   #usage-table td:not(:first-child), #usage-table th:not(:first-child) { white-space:nowrap; color:var(--muted); }
   .hidden { display:none !important; }
@@ -211,7 +211,7 @@
 
 <dialog id="photo-dialog">
   <h2>Suggest a list from photos</h2>
-  <p class="muted">Snap your fridge, freezer, pantry or cupboard. Claude lists what it sees, what looks low or missing, and anything your note asks for. You review every line before it's added.</p>
+  <p class="muted">Snap your fridge, freezer, pantry or cupboard. Claude looks for gaps: what is low or missing and anything your note asks for. What is already stocked or on the list is shown too, preset to Skip. You review every line before it's added.</p>
   <p id="photo-backend" class="muted"></p>
   <div class="row">
     <label class="muted" for="photo-list">Add to</label>

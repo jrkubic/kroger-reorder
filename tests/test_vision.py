@@ -8,12 +8,14 @@ import anthropic
 import httpx2
 import pytest
 
+from kroger_reorder.storage import Item
 from kroger_reorder.vision import (API_MAX_TOKENS, SYSTEM, CliTimeout, RunResult, VisionError, Wording, analyze,
-                                   build_prompt, choose_backend, complete, context_text, parse_suggestions)
+                                   build_prompt, photo_text, KINDS, choose_backend, complete, context_text, parse_suggestions)
 
 PHOTOS = [Path("C:/tmp/a.jpg"), Path("C:/tmp/b.jpg")]
-GOOD = [{"name": "whole milk", "quantity": 1, "kind": "seen", "reason": "Half a gallon left"},
-        {"name": "large eggs", "quantity": "2", "kind": "suggested", "reason": "Carton is empty"}]
+GOOD = [{"name": "whole milk", "quantity": 1, "kind": "low", "reason": "Half a gallon left"},
+        {"name": "large eggs", "quantity": "2", "kind": "missing", "reason": "Carton is empty"}]
+EGGS = [Item(upc="0002", name="Large Eggs", size="12 ct", quantity=1)]
 
 
 def envelope(result, **over):
@@ -39,15 +41,23 @@ def which_ok(name):
 # -- prompt -------------------------------------------------------------------------
 
 def test_prompt_mentions_photos_note_and_history():
-    text = build_prompt(PHOTOS, "out of eggs", "- Whole Milk: bought 3x")
+    text = build_prompt(PHOTOS, "out of eggs", "Weekly", EGGS, "- Whole Milk: bought 3x")
     assert "C:\\tmp\\a.jpg" in text or "C:/tmp/a.jpg" in text
     assert "User's note: out of eggs" in text
     assert "- Whole Milk: bought 3x" in text
+    assert "Items already on the list 'Weekly':" in text and "- Large Eggs ×1" in text
     assert "JSON array" in text
 
 
+def test_system_prompt_asks_for_gaps_and_names_every_kind():
+    assert KINDS == ("low", "missing", "asked", "stocked", "on_list")
+    for kind in KINDS:
+        assert f'"{kind}"' in SYSTEM
+    assert "gaps" in SYSTEM and "not to inventory" in SYSTEM
+
+
 def test_prompt_placeholders_when_empty():
-    text = build_prompt(PHOTOS, "  ", "")
+    text = build_prompt(PHOTOS, "  ", "Weekly", [], "")
     assert "User's note: (none)" in text and "(no orders yet)" in text
 
 
@@ -56,13 +66,13 @@ def test_prompt_placeholders_when_empty():
 def test_parse_good_output_clamps_and_tags():
     out = parse_suggestions(json.dumps(GOOD))
     assert [(s.name, s.quantity, s.kind, s.reason) for s in out] == [
-        ("whole milk", 1, "seen", "Half a gallon left"), ("large eggs", 2, "suggested", "Carton is empty")]
+        ("whole milk", 1, "low", "Half a gallon left"), ("large eggs", 2, "missing", "Carton is empty")]
 
 
 def test_parse_tolerates_fences_prose_bad_kinds_and_duplicates():
     text = 'Here you go:\n```json\n[{"name":"Milk","quantity":99,"kind":"weird"},{"name":"milk"},{"name":""},5]\n```'
     out = parse_suggestions(text)
-    assert [(s.name, s.quantity, s.kind) for s in out] == [("Milk", 10, "seen")]
+    assert [(s.name, s.quantity, s.kind) for s in out] == [("Milk", 10, "low")]
 
 
 def test_parse_caps_item_count():
@@ -80,7 +90,7 @@ def test_parse_garbage_is_502():
 
 def test_analyze_runs_cli_with_photos_and_parses_result():
     run = fake_runner(stdout=envelope(json.dumps(GOOD)))
-    out = analyze(PHOTOS, "note", "history", model="claude-opus-5", timeout=42, runner=run, which=which_ok)
+    out = analyze(PHOTOS, "note", "Weekly", EGGS, "history", model="claude-opus-5", timeout=42, runner=run, which=which_ok)
     assert [s.name for s in out] == ["whole milk", "large eggs"]
     (args, stdin_text, timeout), = run.calls
     assert args[0] == r"C:\tools\claude.cmd" and args[1] == "-p"
@@ -90,33 +100,34 @@ def test_analyze_runs_cli_with_photos_and_parses_result():
     # The prompt goes on stdin, never as an argument: the Windows .CMD shim truncates multi-line args.
     assert not any("\n" in a for a in args)
     assert "note" in stdin_text and "history" in stdin_text and "a.jpg" in stdin_text
+    assert "- Large Eggs ×1" in stdin_text
     assert timeout == 42
 
 
 def test_analyze_missing_cli_is_503():
     with pytest.raises(VisionError) as exc:
-        analyze(PHOTOS, "", "", model="m", timeout=5, runner=fake_runner(), which=lambda n: None)
+        analyze(PHOTOS, "", "Weekly", [], "", model="m", timeout=5, runner=fake_runner(), which=lambda n: None)
     assert exc.value.status == 503
 
 
 def test_analyze_nonzero_exit_reports_last_stderr_line():
     run = fake_runner(returncode=1, stderr="warning\nNot logged in. Please run /login")
     with pytest.raises(VisionError) as exc:
-        analyze(PHOTOS, "", "", model="m", timeout=5, runner=run, which=which_ok)
+        analyze(PHOTOS, "", "Weekly", [], "", model="m", timeout=5, runner=run, which=which_ok)
     assert exc.value.status == 502 and "Not logged in" in exc.value.message
 
 
 def test_analyze_error_envelope_is_502():
     run = fake_runner(stdout=envelope("rate limited", is_error=True, subtype="error_during_execution"))
     with pytest.raises(VisionError) as exc:
-        analyze(PHOTOS, "", "", model="m", timeout=5, runner=run, which=which_ok)
+        analyze(PHOTOS, "", "Weekly", [], "", model="m", timeout=5, runner=run, which=which_ok)
     assert exc.value.status == 502 and "rate limited" in exc.value.message
 
 
 def test_analyze_non_json_stdout_is_502():
     run = fake_runner(stdout="<html>oops")
     with pytest.raises(VisionError) as exc:
-        analyze(PHOTOS, "", "", model="m", timeout=5, runner=run, which=which_ok)
+        analyze(PHOTOS, "", "Weekly", [], "", model="m", timeout=5, runner=run, which=which_ok)
     assert exc.value.status == 502
 
 
@@ -124,7 +135,7 @@ def test_analyze_timeout_bubbles_as_504():
     def slow(args, stdin_text, timeout):
         raise CliTimeout()
     with pytest.raises(VisionError) as exc:
-        analyze(PHOTOS, "", "", model="m", timeout=5, runner=slow, which=which_ok)
+        analyze(PHOTOS, "", "Weekly", [], "", model="m", timeout=5, runner=slow, which=which_ok)
     assert exc.value.status == 504 and "fewer or smaller photos" in exc.value.message
 
 
@@ -170,6 +181,7 @@ def test_context_text_has_note_and_history_with_placeholders():
     assert "- Milk: 3x" in context_text("out of eggs", "- Milk: 3x")
     text = context_text("  ", "")
     assert "User's note: (none)" in text and "(no orders yet)" in text
+    assert "(empty)" in photo_text("", "Weekly", [], "")
 
 
 def test_choose_backend_prefers_api_key_then_cli():
@@ -180,7 +192,7 @@ def test_choose_backend_prefers_api_key_then_cli():
 
 def test_analyze_api_sends_inline_images_and_parses_text(jpg_photos):
     make = fake_client(result=api_message(json.dumps(GOOD)))
-    out = analyze(jpg_photos, "out of eggs", "- Milk: 3x", model="claude-opus-5-5", timeout=42,
+    out = analyze(jpg_photos, "out of eggs", "Weekly", EGGS, "- Milk: 3x", model="claude-opus-5-5", timeout=42,
                   api_key="sk-test", make_client=make, which=lambda n: None, runner=fake_runner())
     assert [s.name for s in out] == ["whole milk", "large eggs"]
     assert make.created == [{"api_key": "sk-test", "timeout": 42, "max_retries": 1}]
@@ -212,21 +224,21 @@ def test_analyze_api_sends_inline_images_and_parses_text(jpg_photos):
 ])
 def test_analyze_api_maps_sdk_errors(jpg_photos, error, status, needle):
     with pytest.raises(VisionError) as exc:
-        analyze(jpg_photos, "", "", model="m", timeout=42, api_key="sk", make_client=fake_client(error=error))
+        analyze(jpg_photos, "", "Weekly", [], "", model="m", timeout=42, api_key="sk", make_client=fake_client(error=error))
     assert exc.value.status == status and needle in exc.value.message
 
 
 def test_analyze_api_refusal_is_502(jpg_photos):
     make = fake_client(result=api_message("", stop_reason="refusal"))
     with pytest.raises(VisionError) as exc:
-        analyze(jpg_photos, "", "", model="m", timeout=5, api_key="sk", make_client=make)
+        analyze(jpg_photos, "", "Weekly", [], "", model="m", timeout=5, api_key="sk", make_client=make)
     assert exc.value.status == 502 and "declined" in exc.value.message
 
 
 def test_analyze_api_max_tokens_is_502(jpg_photos):
     make = fake_client(result=api_message(json.dumps(GOOD), stop_reason="max_tokens"))
     with pytest.raises(VisionError) as exc:
-        analyze(jpg_photos, "", "", model="m", timeout=5, api_key="sk", make_client=make)
+        analyze(jpg_photos, "", "Weekly", [], "", model="m", timeout=5, api_key="sk", make_client=make)
     assert exc.value.status == 502 and "cut off" in exc.value.message
 
 
@@ -236,7 +248,7 @@ def test_analyze_api_bad_request_surfaces_inner_api_message(jpg_photos):
         "Error code: 400 - {...}", response=httpx2.Response(400, request=request),
         body={"type": "error", "error": {"type": "invalid_request_error", "message": "image exceeds 5 MB maximum"}})
     with pytest.raises(VisionError) as exc:
-        analyze(jpg_photos, "", "", model="m", timeout=5, api_key="sk", make_client=fake_client(error=error))
+        analyze(jpg_photos, "", "Weekly", [], "", model="m", timeout=5, api_key="sk", make_client=fake_client(error=error))
     assert exc.value.status == 502 and "image exceeds 5 MB maximum" in exc.value.message
 
 
@@ -245,13 +257,13 @@ def test_analyze_api_tolerates_non_dict_error_body(jpg_photos):
     error = anthropic.BadRequestError("Error code: 400", response=httpx2.Response(400, request=request),
                                       body={"error": "unauthorized"})
     with pytest.raises(VisionError) as exc:
-        analyze(jpg_photos, "", "", model="m", timeout=5, api_key="sk", make_client=fake_client(error=error))
+        analyze(jpg_photos, "", "Weekly", [], "", model="m", timeout=5, api_key="sk", make_client=fake_client(error=error))
     assert exc.value.status == 502 and "Error code: 400" in exc.value.message
 
 
 def test_analyze_without_key_or_cli_explains_both_options():
     with pytest.raises(VisionError) as exc:
-        analyze(PHOTOS, "", "", model="m", timeout=5, runner=fake_runner(), which=lambda n: None)
+        analyze(PHOTOS, "", "Weekly", [], "", model="m", timeout=5, runner=fake_runner(), which=lambda n: None)
     assert exc.value.status == 503
     assert "ANTHROPIC_API_KEY" in exc.value.message and "Claude Code" in exc.value.message
 

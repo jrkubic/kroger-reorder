@@ -483,37 +483,45 @@ def test_usage_profile_from_recorded_orders(client):
 PNG = base64.b64encode(b"\x89PNG\r\n\x1a\nfake").decode()
 
 
-def photo_body(n=1, note="out of eggs", media_type="image/png", data=PNG):
-    return {"photos": [{"media_type": media_type, "data": data}] * n, "note": note}
+def photo_body(n=1, note="out of eggs", media_type="image/png", data=PNG, slug="standard"):
+    return {"photos": [{"media_type": media_type, "data": data}] * n, "slug": slug, "note": note}
 
 
 @pytest.fixture
 def analyzer_client(storage, kroger):
     calls = []
 
-    def fake(paths, note, profile, *, model, timeout):
+    def fake(paths, note, list_name, items, profile, *, model, timeout):
         calls.append({"paths": [p for p in paths], "exists": [p.exists() for p in paths], "note": note,
-                      "profile": profile, "model": model, "timeout": timeout})
-        return [Suggestion("whole milk", 1, "seen", "Half left"), Suggestion("large eggs", 2, "suggested", "")]
+                      "list_name": list_name, "items": list(items), "profile": profile, "model": model,
+                      "timeout": timeout})
+        return [Suggestion("whole milk", 1, "low", "Half left"), Suggestion("large eggs", 2, "stocked", "")]
     app = create_app(storage, kroger, photo_model="test-model", photo_timeout=7, analyzer=fake)
     client = TestClient(app, follow_redirects=False)
     client.calls = calls
     return client
 
 
-def test_photo_suggest_writes_temp_files_passes_context_and_returns_lines(analyzer_client):
-    push_one(analyzer_client)
+def test_photo_suggest_writes_temp_files_passes_context_and_returns_lines(analyzer_client, storage):
+    push_one(analyzer_client)  # records an order (usage profile) and leaves Whole Milk on the list
+    storage.save_list("standard", "Standard", [Item(upc="0002", name="Eggs", size="12 ct", quantity=1)])
     r = analyzer_client.post("/api/photo/suggest", json=photo_body(n=2))
     assert r.status_code == 200
     assert r.json()["lines"] == [
-        {"raw": "seen: Half left", "name": "whole milk", "quantity": 1, "exact": None, "kind": "seen", "reason": "Half left"},
-        {"raw": "suggested", "name": "large eggs", "quantity": 2, "exact": None, "kind": "suggested", "reason": ""},
+        {"raw": "low: Half left", "name": "whole milk", "quantity": 1, "exact": None, "kind": "low", "reason": "Half left"},
+        {"raw": "stocked", "name": "large eggs", "quantity": 2, "exact": None, "kind": "stocked", "reason": ""},
     ]
     (call,) = analyzer_client.calls
     assert [p.suffix for p in call["paths"]] == [".png", ".png"] and call["exists"] == [True, True]
     assert not any(p.exists() for p in call["paths"]), "photos must be deleted after the request"
     assert call["note"] == "out of eggs" and "Whole Milk: bought 1x" in call["profile"]
+    assert call["list_name"] == "Standard" and [i.name for i in call["items"]] == ["Eggs"]
     assert call["model"] == "test-model" and call["timeout"] == 7
+
+
+def test_photo_suggest_unknown_list_is_404_before_analysis(analyzer_client):
+    r = analyzer_client.post("/api/photo/suggest", json=photo_body(slug="nope"))
+    assert r.status_code == 404 and analyzer_client.calls == []
 
 
 def test_photo_suggest_validation(analyzer_client):
@@ -528,7 +536,7 @@ def test_photo_suggest_validation(analyzer_client):
 
 
 def test_photo_suggest_maps_vision_errors(storage, kroger):
-    def broken(paths, note, profile, *, model, timeout):
+    def broken(paths, note, list_name, items, profile, *, model, timeout):
         raise VisionError(503, "Claude Code isn't installed on the computer running the app, so photos can't be analyzed.")
     client = TestClient(create_app(storage, kroger, analyzer=broken))
     r = client.post("/api/photo/suggest", json=photo_body())
