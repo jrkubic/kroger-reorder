@@ -28,7 +28,37 @@ def test_create_list_writes_empty_file_and_returns_slug(tmp_path):
     slug = s.create_list("Weekly Staples")
     assert slug == "weekly-staples"
     raw = json.loads((tmp_path / "lists" / "weekly-staples.json").read_text(encoding="utf-8"))
-    assert raw == {"name": "Weekly Staples", "items": []}
+    assert raw == {"name": "Weekly Staples", "store": "kroger", "items": []}
+
+
+def test_lists_default_to_kroger_and_persist_a_store(tmp_path):
+    s = Storage(tmp_path)
+    assert s.load_list(s.create_list("Weekly")).store == "kroger"
+    slug = s.create_list("Aldi run", store="aldi")
+    raw = json.loads((tmp_path / "lists" / f"{slug}.json").read_text(encoding="utf-8"))
+    assert raw == {"name": "Aldi run", "store": "aldi", "items": []}
+    assert s.load_list(slug).store == "aldi"
+    assert [(l["slug"], l["store"]) for l in s.list_lists()] == [(slug, "aldi"), ("weekly", "kroger")]
+
+
+def test_save_without_store_keeps_it_and_duplicate_copies_it(tmp_path):
+    s = Storage(tmp_path)
+    slug = s.create_list("Aldi run", store="aldi")
+    s.save_list(slug, "Aldi trip", [milk()])          # rename-style save: store untouched
+    assert s.load_list(slug).store == "aldi"
+    s.rename_list(slug, "Aldi again")
+    assert s.load_list(slug).store == "aldi"
+    copy = s.duplicate_list(slug, "Copy")
+    assert s.load_list(copy).store == "aldi"
+    s.save_list(slug, "Aldi trip", [], store="meijer")  # an explicit store wins
+    assert s.load_list(slug).store == "meijer"
+
+
+def test_file_without_store_field_is_a_kroger_list(tmp_path):
+    (tmp_path / "lists").mkdir()
+    (tmp_path / "lists" / "old.json").write_text('{"name": "Old", "items": []}', encoding="utf-8")
+    loaded = Storage(tmp_path).load_list("old")
+    assert loaded.store == "kroger" and loaded.warning is None
 
 
 def test_slug_collisions_get_numeric_suffix(tmp_path):
@@ -211,9 +241,9 @@ def test_list_lists_sorted_by_name_with_counts(tmp_path):
     s.save_list("a", "Zulu", [])
     (tmp_path / "lists" / "bad.json").write_text("nope", encoding="utf-8")
     assert s.list_lists() == [
-        {"slug": "z", "name": "Alpha", "count": 2},
-        {"slug": "bad", "name": "bad", "count": 0},
-        {"slug": "a", "name": "Zulu", "count": 0},
+        {"slug": "z", "name": "Alpha", "count": 2, "store": "kroger"},
+        {"slug": "bad", "name": "bad", "count": 0, "store": "kroger"},
+        {"slug": "a", "name": "Zulu", "count": 0, "store": "kroger"},
     ]
 
 
@@ -227,7 +257,7 @@ def test_list_lists_skips_lists_that_vanish_mid_iteration(tmp_path, monkeypatch)
         return None if slug == "a" else real_load(slug)
 
     monkeypatch.setattr(s, "load_list", racy_load)
-    assert s.list_lists() == [{"slug": "b", "name": "B", "count": 1}]
+    assert s.list_lists() == [{"slug": "b", "name": "B", "count": 1, "store": "kroger"}]
 
 
 # -- migration / ensure_ready -----------------------------------------------

@@ -93,7 +93,7 @@ def test_initial_state_has_default_list(client):
     assert r.status_code == 200
     assert r.json() == {
         "store": None, "signed_in": False,
-        "lists": [{"slug": "standard", "name": "Standard", "count": 0}],
+        "lists": [{"slug": "standard", "name": "Standard", "count": 0, "store": "kroger"}],
         "active_list": "standard",
         "photo_backend": None, "public_url": "http://localhost:8000",
     }
@@ -233,7 +233,7 @@ def test_delete_active_list_switches_to_remaining(client):
     client.post("/api/lists", json={"name": "Other"})
     r = client.delete("/api/lists/standard")
     assert r.status_code == 200
-    assert r.json() == {"lists": [{"slug": "other", "name": "Other", "count": 0}], "active_list": "other"}
+    assert r.json() == {"lists": [{"slug": "other", "name": "Other", "count": 0, "store": "kroger"}], "active_list": "other"}
 
 
 def test_delete_last_list_is_refused(client):
@@ -288,7 +288,7 @@ def test_delete_non_active_list_keeps_active_route(client):
     client.post("/api/lists", json={"name": "Other"})
     r = client.delete("/api/lists/other")
     assert r.status_code == 200
-    assert r.json() == {"lists": [{"slug": "standard", "name": "Standard", "count": 0}], "active_list": "standard"}
+    assert r.json() == {"lists": [{"slug": "standard", "name": "Standard", "count": 0, "store": "kroger"}], "active_list": "standard"}
     assert client.get("/api/lists/standard").status_code == 200
 
 

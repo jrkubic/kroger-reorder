@@ -101,6 +101,7 @@ kroger-reorder/
 │   ├── main.py            FastAPI app factory and every HTTP route
 │   ├── kroger.py          Kroger API client: OAuth, locations, products, cart
 │   ├── storage.py         JSON persistence: lists, config, tokens, order history
+│   ├── stores.py          The stores a list can belong to: Kroger (catalog, cart) and hand-off stores
 │   ├── orders.py          Builds an order snapshot after a successful send
 │   ├── importer.py        Parses text, Markdown, CSV, TSV, and JSON into lines
 │   ├── vision.py          Claude backends (Anthropic API or headless Claude Code) and photo suggestions

@@ -1,5 +1,6 @@
 # kroger_reorder/storage.py
-"""Plain-JSON persistence: named grocery lists, order history, store config, and Kroger tokens."""
+"""Plain-JSON persistence: named grocery lists (each belonging to a store), order history, the Kroger
+store choice, and Kroger tokens."""
 from __future__ import annotations
 
 import json
@@ -49,6 +50,7 @@ class ListLoad:
     name: str
     items: list[Item]
     warning: str | None = None
+    store: str = DEFAULT_STORE  # a key from stores.PROVIDERS; validated by the routes, not here
 
 
 def _float_or_none(value: Any) -> float | None:
@@ -128,7 +130,7 @@ class Storage:
                 loaded = self.load_list(slug)
                 if loaded is None:
                     continue
-                out.append({"slug": slug, "name": loaded.name, "count": len(loaded.items)})
+                out.append({"slug": slug, "name": loaded.name, "count": len(loaded.items), "store": loaded.store})
         return sorted(out, key=lambda d: d["name"].lower())
 
     def load_list(self, slug: str) -> ListLoad | None:
@@ -144,15 +146,17 @@ class Storage:
         if not isinstance(raw, dict) or "items" not in raw:
             return ListLoad(slug, slug, [], warning=f"{file} should be an object with a name and an items array.{UNTOUCHED}")
         name = str(raw.get("name") or slug)
+        store = str(raw.get("store") or DEFAULT_STORE)
         try:
             items = parse_items(raw["items"])
         except ValueError as exc:
             if "JSON array" in str(exc):
                 return ListLoad(slug, name, [], warning=f"{file} should be an object with a name and an items array.{UNTOUCHED}")
             return ListLoad(slug, name, [], warning=f"{file} has an entry with unexpected or missing fields ({exc}).{UNTOUCHED}")
-        return ListLoad(slug, name, items)
+        return ListLoad(slug, name, items, store=store)
 
-    def save_list(self, slug: str, name: str, items: list[Item]) -> None:
+    def save_list(self, slug: str, name: str, items: list[Item], store: str | None = None) -> None:
+        """`store=None` keeps the list's current store (or the default for a new list)."""
         if not _valid_slug(slug):
             raise KeyError(slug)
         file = self._list_file(slug)
@@ -160,16 +164,18 @@ class Storage:
             loaded = self.load_list(slug)
             if loaded is not None and loaded.warning and self._path(file).exists():
                 self._backup(file)
-            self._write(file, {"name": name, "items": [asdict(i) for i in items]})
+            if store is None:
+                store = loaded.store if loaded is not None else DEFAULT_STORE
+            self._write(file, {"name": name, "store": store, "items": [asdict(i) for i in items]})
 
-    def create_list(self, name: str) -> str:
+    def create_list(self, name: str, store: str = DEFAULT_STORE) -> str:
         with self._lock:
             base = slugify(name)
             slug, n = base, 2
             while self._path(self._list_file(slug)).exists():
                 slug = f"{base}-{n}"
                 n += 1
-            self.save_list(slug, name, [])
+            self.save_list(slug, name, [], store)
             return slug
 
     def rename_list(self, slug: str, name: str) -> None:
@@ -184,7 +190,7 @@ class Storage:
             loaded = self.load_list(slug)
             if loaded is None:
                 raise KeyError(slug)
-            new = self.create_list(name)
+            new = self.create_list(name, loaded.store)
             self.save_list(new, name, loaded.items)
             return new
 
