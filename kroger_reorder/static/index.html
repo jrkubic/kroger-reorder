@@ -21,11 +21,16 @@
   input[type=number] { width:64px; }
   textarea { width:100%; margin:8px 0; resize:vertical; }
   #recipe-url { width:100%; }
+  #new-list-name { flex:1; min-width:0; }
+  .handoff li a { white-space:nowrap; color:var(--accent); font-size:.9rem; }
+  .handoff .qty { color:var(--muted); font-size:.9rem; }
+  #handoff-text { font-family:ui-monospace,monospace; font-size:.9rem; }
   button { font:inherit; padding:8px 14px; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; }
   button.secondary { background:#eceeea; color:var(--ink); }
   button.danger { background:transparent; color:var(--danger); padding:4px 8px; }
   button:disabled { opacity:.5; cursor:default; }
   .btn { display:inline-block; font:inherit; padding:8px 14px; border-radius:8px; background:var(--accent); color:#fff; text-decoration:none; }
+  .btn.secondary { background:#eceeea; color:var(--ink); }
   .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .row.between { justify-content:space-between; }
   ul { list-style:none; margin:8px 0 0; padding:0; }
@@ -149,10 +154,11 @@
         <button class="secondary" data-action="export">Export CSV</button>
       </div>
     </div>
-    <div class="row between" style="margin-top:10px">
+    <div id="store-line" class="row between" style="margin-top:10px">
       <span class="muted"><span id="store-label"></span> <button id="change-store" class="link">Change store</button></span>
     </div>
-    <div class="row between" style="margin-top:10px">
+    <p id="handoff-line" class="muted hidden" style="margin:10px 0 0"></p>
+    <div id="price-row" class="row between" style="margin-top:10px">
       <span id="price-status" class="muted"></span>
       <button id="check-prices" class="secondary">Check prices</button>
     </div>
@@ -183,8 +189,9 @@
 
 <footer id="footer">
   <div class="inner">
-    <span class="muted">Start from an empty Kroger cart, or quantities will double.</span>
+    <span id="footer-note" class="muted">Start from an empty Kroger cart, or quantities will double.</span>
     <button id="push">Send to cart</button>
+    <button id="open-store" class="hidden">Open at store</button>
   </div>
 </footer>
 
@@ -202,13 +209,41 @@
   </div>
   <div id="import-review" class="hidden">
     <table id="import-table">
-      <thead><tr><th>Your line</th><th>Qty</th><th>Match at your store</th></tr></thead>
+      <thead><tr><th>Your line</th><th>Qty</th><th id="import-match-head">Match at your store</th></tr></thead>
       <tbody></tbody>
     </table>
     <div class="row">
       <button id="import-commit">Add to list</button>
       <span id="import-summary" class="muted"></span>
     </div>
+  </div>
+</dialog>
+
+<dialog id="new-list-dialog">
+  <h2>New list</h2>
+  <form id="new-list-form">
+    <div class="row">
+      <input id="new-list-name" type="text" placeholder="Name, e.g. Aldi run" autocomplete="off">
+      <select id="new-list-store" title="Store"></select>
+    </div>
+    <p class="muted">Kroger lists search the catalog and fill your cart. Aldi, Meijer and Walmart lists hold plain items and open the store's own site to shop them.</p>
+    <div class="row">
+      <button id="new-list-create">Create</button>
+      <button type="button" id="new-list-cancel" class="secondary">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="handoff-dialog">
+  <h2 id="handoff-title">Shop this list</h2>
+  <p id="handoff-intro" class="muted"></p>
+  <ul id="handoff-items" class="handoff"></ul>
+  <textarea id="handoff-text" rows="5" readonly class="hidden"></textarea>
+  <div id="handoff-banner" class="banner"></div>
+  <div class="row">
+    <button id="handoff-copy">Copy list</button>
+    <a id="handoff-home" class="btn secondary" target="_blank" rel="noopener">Open the store's site</a>
+    <button id="handoff-close" class="secondary">Close</button>
   </div>
 </dialog>
 

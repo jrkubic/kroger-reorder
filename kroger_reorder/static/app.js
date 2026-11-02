@@ -5,7 +5,9 @@ function isHost() { return LOCAL_HOST || (!!state.public_url && location.origin 
 const STALE_MS = 24 * 60 * 60 * 1000;
 
 let state = { store: null, signed_in: false, lists: [], active_list: null, name: '', items: [], warning: null,
-              photo_backend: null, public_url: null };
+              photo_backend: null, public_url: null,
+              stores: [],            // [{key, name, has_catalog}] from /api/state: the stores a list can belong to
+              store_key: 'kroger' }; // the active list's store
 let importRows = [];  // [{raw, name, quantity, candidates, kind?, reason?, group?}]  (kind/reason/group only from Photo and Recipe)
 let orders = [];        // from GET /api/orders, newest first
 let openOrderId = null; // which order row is expanded
@@ -50,6 +52,13 @@ function thumb(url) {
   return url ? `<img class="thumb" src="${esc(url)}" alt="" loading="lazy">` : `<div class="thumb placeholder"></div>`;
 }
 
+// The active list's store. Kroger lists have a catalog and a cart; the others are hand-off lists:
+// plain item names, shopped on the store's own site through the "Open at <store>" panel.
+function providerOf(key) {
+  return state.stores.find(s => s.key === key) || { key, name: key, has_catalog: key === 'kroger' };
+}
+function isHandOff() { return !!state.active_list && !providerOf(state.store_key).has_catalog; }
+
 function listPath(suffix = '') {
   return `/api/lists/${encodeURIComponent(state.active_list)}${suffix}`;
 }
@@ -74,7 +83,7 @@ function newestCheck() {
 }
 
 function pricesStale() {
-  if (!state.store || !state.items.length) return false;
+  if (!state.store || !state.items.length || isHandOff()) return false;
   const newest = newestCheck();
   return !newest || (Date.now() - new Date(newest).getTime()) > STALE_MS;
 }
@@ -83,14 +92,30 @@ function pricesStale() {
 
 function render() {
   const setupDone = !!(state.store && state.signed_in);
+  const handOff = isHandOff();
+  const store = providerOf(state.store_key);
+  const anyChecked = state.items.some(i => i.included);
   $('setup').classList.toggle('hidden', setupDone);
   $('store-block').classList.toggle('hidden', !!state.store);
   $('signin-block').classList.toggle('hidden', !!state.signed_in);
   $('signin-link').classList.toggle('hidden', !isHost());
   $('signin-remote').classList.toggle('hidden', isHost());
-  $('add').classList.toggle('hidden', !state.store);
+  $('add').classList.toggle('hidden', !state.store && !handOff);
+  $('term').placeholder = handOff ? 'Add an item, e.g. bananas' : 'Search your store, e.g. whole milk';
+  $('search').textContent = handOff ? 'Add' : 'Search';
   $('store-label').textContent = state.store ? state.store.store_name : '';
-  $('push').disabled = !setupDone || !state.items.some(i => i.included);
+  $('store-line').classList.toggle('hidden', handOff);
+  $('price-row').classList.toggle('hidden', handOff);
+  $('handoff-line').classList.toggle('hidden', !handOff);
+  $('handoff-line').textContent = handOff ? `This list is for ${store.name}: items are plain names. Tick what you need, then Open at ${store.name}.` : '';
+  $('push').classList.toggle('hidden', handOff);
+  $('push').disabled = !setupDone || !anyChecked;
+  $('open-store').classList.toggle('hidden', !handOff);
+  $('open-store').textContent = `Open at ${store.name}`;
+  $('open-store').disabled = !anyChecked;
+  $('footer-note').textContent = handOff ? 'Checked items are the ones you will shop for.' : 'Start from an empty Kroger cart, or quantities will double.';
+  $('empty').textContent = handOff ? 'Nothing in this list yet. Type an item above and press Add, or click Import.'
+                                   : 'Nothing in this list yet. Search above to add items, or click Import.';
   $('check-prices').disabled = !state.store || !state.items.length;
 
   const sel = $('list-select');
@@ -98,7 +123,8 @@ function render() {
   state.lists.forEach(l => {
     const opt = document.createElement('option');
     opt.value = l.slug;
-    opt.textContent = `${l.name} (${l.count})`;
+    const where = l.store && l.store !== 'kroger' ? ` · ${providerOf(l.store).name}` : '';
+    opt.textContent = `${l.name}${where} (${l.count})`;
     opt.selected = l.slug === state.active_list;
     sel.appendChild(opt);
   });
@@ -114,8 +140,8 @@ function render() {
     if (item.bad) li.classList.add('bad');
     li.innerHTML = `
       <input type="checkbox" ${item.included ? 'checked' : ''} data-idx="${idx}" data-field="included">
-      ${thumb(item.image)}
-      <div class="name"><div>${esc(item.name)}</div><div class="size">${esc(item.size)} ${priceHtml(item)}</div></div>
+      ${handOff ? '' : thumb(item.image)}
+      <div class="name"><div>${esc(item.name)}</div>${handOff ? '' : `<div class="size">${esc(item.size)} ${priceHtml(item)}</div>`}</div>
       <input type="number" min="1" value="${item.quantity}" data-idx="${idx}" data-field="quantity">
       <button class="danger" data-remove="${esc(item.upc)}" title="Remove">&#x2715;</button>`;
     ul.appendChild(li);
@@ -133,6 +159,7 @@ function adoptList(data) {
   const bad = new Set(state.items.filter(i => i.bad).map(i => i.upc));
   state.items = data.items.map(i => ({ ...i, bad: bad.has(i.upc) }));
   state.name = data.name;
+  state.store_key = data.store || 'kroger';
   state.warning = data.warning;
 }
 
@@ -141,7 +168,7 @@ function adoptList(data) {
 async function refreshLists() {
   const s = await api('GET', '/api/state');
   Object.assign(state, { store: s.store, signed_in: s.signed_in, lists: s.lists, active_list: s.active_list,
-                         photo_backend: s.photo_backend, public_url: s.public_url });
+                         photo_backend: s.photo_backend, public_url: s.public_url, stores: s.stores || [] });
 }
 
 async function loadList() {
@@ -185,6 +212,7 @@ async function switchList(slug) {
   await api('PUT', '/api/active', { slug });
   state.active_list = slug;
   banner();
+  $('search-results').innerHTML = '';  // results from one store's catalog mean nothing on another list
   await loadList();
   render();
   if (pricesStale()) refreshPrices(false);
@@ -226,6 +254,13 @@ async function search() {
   banner();
   const term = $('term').value.trim();
   if (!term) return;
+  if (isHandOff()) {  // no catalog: the box adds the item as typed
+    try {
+      adoptList(await api('POST', listPath('/items'), { name: term }));
+      $('term').value = ''; render();
+    } catch (e) { banner('error', e.message); }
+    return;
+  }
   try {
     const { results } = await api('GET', `/api/search?term=${encodeURIComponent(term)}`);
     const ul = $('search-results'); ul.innerHTML = '';
@@ -283,9 +318,9 @@ $('list-section').addEventListener('click', async (e) => {
   banner();
   try {
     if (action === 'new') {
-      const name = prompt('Name for the new list:');
-      if (!name?.trim()) return;
-      const { slug } = await api('POST', '/api/lists', { name });
+      const choice = await askNewList();
+      if (!choice) return;
+      const { slug } = await api('POST', '/api/lists', choice);
       await refreshLists();
       await switchList(slug);
     } else if (action === 'rename') {
@@ -319,6 +354,61 @@ $('list-section').addEventListener('click', async (e) => {
   } catch (err) { banner('error', err.message); }
 });
 
+// -- new-list dialog ------------------------------------------------------------------------
+
+// Name plus store. Resolves to {name, store}, or null when cancelled (button, Escape, or empty name).
+function askNewList() {
+  return new Promise((resolve) => {
+    const dlg = $('new-list-dialog'), name = $('new-list-name'), store = $('new-list-store');
+    name.value = '';
+    store.innerHTML = state.stores.map(s => `<option value="${esc(s.key)}">${esc(s.name)}</option>`).join('');
+    store.value = 'kroger';
+    const done = (value) => { dlg.removeEventListener('close', onClose); dlg.close(); resolve(value); };
+    const onClose = () => done(null);
+    dlg.addEventListener('close', onClose);
+    $('new-list-form').onsubmit = (e) => { e.preventDefault(); const n = name.value.trim(); if (n) done({ name: n, store: store.value }); };
+    $('new-list-cancel').onclick = () => done(null);
+    dlg.showModal();
+    name.focus();
+  });
+}
+
+// -- hand-off panel ("Open at <store>") -------------------------------------------------------
+
+let handoffText = '';
+
+function hostOf(url) { return new URL(url).host.replace(/^www\./, ''); }
+
+async function openHandoff() {
+  banner();
+  try {
+    const data = await api('GET', listPath('/handoff'));
+    handoffText = data.text;
+    $('handoff-title').textContent = `Shop this list at ${data.store_name}`;
+    $('handoff-intro').textContent = `${data.store_name} has no public way to fill a cart, so each item opens a search on ${hostOf(data.home_url)}. Copy the list to take it along in a notes app.`;
+    $('handoff-items').innerHTML = data.items.map(i => `<li><div class="name">${esc(i.name)}${i.quantity > 1 ? ` <span class="qty">\u00d7${i.quantity}</span>` : ''}</div><a href="${esc(i.url)}" target="_blank" rel="noopener">Search at ${esc(data.store_name)} \u2197</a></li>`).join('');
+    $('handoff-home').href = data.home_url;
+    $('handoff-home').textContent = `Open ${hostOf(data.home_url)} \u2197`;
+    $('handoff-text').classList.add('hidden');
+    banner(null, '', false, $('handoff-banner'));
+    $('handoff-dialog').showModal();
+  } catch (e) { banner('error', e.message); }
+}
+
+$('open-store').onclick = openHandoff;
+$('handoff-close').onclick = () => $('handoff-dialog').close();
+$('handoff-copy').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(handoffText);
+    banner('ok', 'Copied.', false, $('handoff-banner'));
+  } catch {
+    // No clipboard API over plain http on a phone: show the text so it can be selected and copied.
+    const ta = $('handoff-text');
+    ta.value = handoffText; ta.classList.remove('hidden'); ta.focus(); ta.select();
+    banner('warn', 'Copy is not available here; select the text below and copy it.', false, $('handoff-banner'));
+  }
+};
+
 // -- import dialog --------------------------------------------------------------------------
 
 function openImport() {
@@ -342,17 +432,22 @@ $('import-text').oninput = () => { importRows = []; $('import-review').classList
 
 // Match parsed lines against the store catalog and show the review table.
 // Rows with a UPC (an exported CSV) are exact products; only the rest need a catalog search.
+// On a hand-off list there is no catalog: every line is offered as typed, to add or skip.
 async function reviewLines(lines, bannerEl) {
-  const toResolve = lines.filter(l => !l.exact);
+  const handOff = isHandOff();
+  const toResolve = handOff ? [] : lines.filter(l => !l.exact);
   let matches = [];
   if (toResolve.length) {
     banner('warn', `Looking up ${plural(toResolve.length, 'item')} at your store…`, false, bannerEl);
     ({ matches } = await api('POST', '/api/import/resolve', { names: toResolve.map(l => l.name) }));
   }
   let next = 0;
-  importRows = groupTogether(lines.map(l => l.exact
-    ? { ...l, candidates: [{ ...l.exact, name: l.name, fromFile: true }] }
-    : { ...l, candidates: matches[next++].candidates }));
+  importRows = groupTogether(lines.map(l => handOff
+    ? { ...l, exact: null, candidates: [{ upc: '', name: l.name }] }
+    : l.exact
+      ? { ...l, candidates: [{ ...l.exact, name: l.name, fromFile: true }] }
+      : { ...l, candidates: matches[next++].candidates }));
+  $('import-match-head').textContent = handOff ? 'Add?' : 'Match at your store';
   banner(null, '', false, bannerEl);
   renderImport();
 }
@@ -394,15 +489,16 @@ function renderRow(idx) {
   // Rows the list already covers, pantry staples, and stocked items start on Skip: shown for
   // transparency, not bought by default; one pick adds them anyway.
   const skip = !row.searched && ['staple', 'on_list', 'stocked'].includes(row.kind);
+  const handOff = isHandOff();
   const options = row.candidates.map((c, ci) =>
-    `<option value="${ci}" ${ci === 0 && !skip ? 'selected' : ''}>${c.fromFile ? 'From file: ' : ''}${esc(c.name)}${c.size ? ' · ' + esc(c.size) : ''}${c.price != null || c.promo != null ? ' · ' + money(c.promo ?? c.price) : ''}</option>`
+    `<option value="${ci}" ${ci === 0 && !skip ? 'selected' : ''}>${c.fromFile ? 'From file: ' : handOff ? 'Add ' : ''}${esc(c.name)}${c.size ? ' · ' + esc(c.size) : ''}${c.price != null || c.promo != null ? ' · ' + money(c.promo ?? c.price) : ''}</option>`
   ).join('');
   const kind = row.kind ? `<span class="kind ${esc(row.kind)}">${esc(row.kind.replace('_', ' '))}</span>` : '';
   const sub = row.kind ? (row.reason || '') : row.raw;
   tr.innerHTML = `
     <td><div>${kind}${esc(row.name)}</div><div class="raw">${esc(sub)}</div></td>
     <td><input type="number" min="1" value="${row.quantity}" data-import-qty="${idx}"></td>
-    <td><select data-import-pick="${idx}">${options}<option value="-1" ${row.candidates.length && !skip ? '' : 'selected'}>${row.candidates.length ? 'Skip this line' : 'No match found — skip'}</option><option value="${SEARCH_PICK}">Search for a different item…</option></select></td>`;
+    <td><select data-import-pick="${idx}">${options}<option value="-1" ${row.candidates.length && !skip ? '' : 'selected'}>${row.candidates.length ? 'Skip this line' : 'No match found — skip'}</option><option value="${SEARCH_PICK}">${handOff ? 'Use a different name…' : 'Search for a different item…'}</option></select></td>`;
   return tr;
 }
 
@@ -431,9 +527,11 @@ function rememberQty(idx) {
 }
 
 // "Search for a different item…": the match cell becomes a search box for this row only.
+// On a hand-off list it is "Use a different name…": the same box, and the name is taken as typed.
 function startRowSearch(idx) {
   const cell = $('import-table').querySelector(`[data-import-pick="${idx}"]`).parentElement;
-  cell.innerHTML = `<div class="row"><input type="text" data-import-search="${idx}" placeholder="Search your store" value="${esc(importRows[idx].name)}"><button class="secondary" data-import-search-go="${idx}">Search</button><button class="secondary" data-import-search-cancel="${idx}">Cancel</button></div>`;
+  const handOff = isHandOff();
+  cell.innerHTML = `<div class="row"><input type="text" data-import-search="${idx}" placeholder="${handOff ? 'Item name' : 'Search your store'}" value="${esc(importRows[idx].name)}"><button class="secondary" data-import-search-go="${idx}">${handOff ? 'Use' : 'Search'}</button><button class="secondary" data-import-search-cancel="${idx}">Cancel</button></div>`;
   cell.querySelector('input').focus();
   updateImportSummary();
 }
@@ -448,6 +546,14 @@ async function runRowSearch(idx) {
   const input = $('import-table').querySelector(`[data-import-search="${idx}"]`);
   const term = input.value.trim();
   if (!term) return;
+  if (isHandOff()) {
+    const row = importRows[idx];
+    rememberQty(idx);
+    Object.assign(row, { name: term, candidates: [{ upc: '', name: term }], searched: true });
+    $('import-table').querySelector(`[data-import-row="${idx}"]`).replaceWith(renderRow(idx));
+    updateImportSummary();
+    return;
+  }
   const button = $('import-table').querySelector(`[data-import-search-go="${idx}"]`);
   input.disabled = button.disabled = true;
   try {
@@ -549,9 +655,9 @@ function backendText(what) {
 async function pickTargetList(sel) {
   let slug = sel.value;
   if (slug === '__new__') {
-    const name = prompt('Name for the new list:');
-    if (!name?.trim()) return null;
-    ({ slug } = await api('POST', '/api/lists', { name }));
+    const choice = await askNewList();
+    if (!choice) return null;
+    ({ slug } = await api('POST', '/api/lists', choice));
     await refreshLists();
   }
   return slug;
@@ -624,7 +730,7 @@ $('photo-go').onclick = async () => {
     if (slug !== state.active_list) await switchList(slug);
     $('photo-dialog').close();
     openImport();
-    banner('warn', `Claude suggested ${plural(lines.length, 'item')}. Matching them to your store…`, false, $('import-banner'));
+    banner('warn', `Claude suggested ${plural(lines.length, 'item')}.${isHandOff() ? '' : ' Matching them to your store…'}`, false, $('import-banner'));
     await reviewLines(lines, $('import-banner'));
   } catch (err) {
     banner('error', err.message, false, $('photo-dialog').open ? pbanner : $('import-banner'));
@@ -663,7 +769,7 @@ $('recipe-go').onclick = async () => {
     if (slug !== state.active_list) await switchList(slug);
     $('recipe-dialog').close();
     openImport();
-    banner('warn', `Claude suggested ${plural(lines.length, 'item')} for “${title || 'the recipe'}”. Matching them to your store…`, false, $('import-banner'));
+    banner('warn', `Claude suggested ${plural(lines.length, 'item')} for “${title || 'the recipe'}”.${isHandOff() ? '' : ' Matching them to your store…'}`, false, $('import-banner'));
     await reviewLines(lines, $('import-banner'));
   } catch (err) {
     banner('error', err.message, false, $('recipe-dialog').open ? rbanner : $('import-banner'));
