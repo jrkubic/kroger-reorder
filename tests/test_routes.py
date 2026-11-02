@@ -251,8 +251,8 @@ def test_plain_items_are_keyed_by_name_and_need_no_upc(client, aldi):
     r = client.post(f"/api/lists/{aldi}/items", json={"name": " Bananas "})
     assert r.status_code == 200
     assert r.json()["items"] == [{"upc": "bananas", "name": "Bananas", "size": "", **FULL}]
-    client.post(f"/api/lists/{aldi}/items", json={"name": "bananas!", "quantity": 3})   # same key: no duplicate
-    assert len(client.get(f"/api/lists/{aldi}").json()["items"]) == 1
+    r = client.post(f"/api/lists/{aldi}/items", json={"name": "bananas!", "quantity": 3})   # same key: one row, more of it
+    assert [(i["name"], i["quantity"]) for i in r.json()["items"]] == [("Bananas", 4)]
     r = client.post(f"/api/lists/{aldi}/items", json={"name": "Eggs", "quantity": 2})
     assert r.json()["items"][1]["quantity"] == 2
     assert client.post(f"/api/lists/{aldi}/items", json={"name": "  "}).json()["error"] == "Give the item a name."

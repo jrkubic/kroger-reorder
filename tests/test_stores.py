@@ -25,6 +25,11 @@ def test_search_link_encodes_the_term():
     assert search_link("meijer", "eggs") == "https://www.meijer.com/shopping/search.html?text=eggs"
 
 
+def test_search_link_refuses_a_catalog_store():
+    with pytest.raises(ValueError):
+        search_link("kroger", "eggs")
+
+
 def test_unknown_store_raises_with_a_user_message():
     with pytest.raises(UnknownStore) as exc:
         provider("costco")

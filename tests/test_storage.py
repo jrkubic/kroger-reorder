@@ -54,6 +54,19 @@ def test_save_without_store_keeps_it_and_duplicate_copies_it(tmp_path):
     assert s.load_list(slug).store == "meijer"
 
 
+def test_damaged_file_keeps_its_store_through_recovery(tmp_path):
+    (tmp_path / "lists").mkdir()
+    bad = tmp_path / "lists" / "aldi.json"
+    bad.write_text('{"name": "Aldi", "store": " Aldi ", "items": [{"name": "no upc"}]}', encoding="utf-8")
+    s = Storage(tmp_path)
+    loaded = s.load_list("aldi")
+    assert loaded.warning and loaded.store == "aldi"
+    s.save_list("aldi", "Aldi", [milk()])  # backs the file up and rewrites it: still an Aldi list
+    assert json.loads(bad.read_text(encoding="utf-8"))["store"] == "aldi"
+    (tmp_path / "lists" / "noitems.json").write_text('{"name": "X", "store": "meijer"}', encoding="utf-8")
+    assert s.load_list("noitems").store == "meijer"
+
+
 def test_file_without_store_field_is_a_kroger_list(tmp_path):
     (tmp_path / "lists").mkdir()
     (tmp_path / "lists" / "old.json").write_text('{"name": "Old", "items": []}', encoding="utf-8")

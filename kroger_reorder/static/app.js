@@ -123,7 +123,7 @@ function render() {
   state.lists.forEach(l => {
     const opt = document.createElement('option');
     opt.value = l.slug;
-    const where = l.store && l.store !== 'kroger' ? ` · ${providerOf(l.store).name}` : '';
+    const where = l.store && !providerOf(l.store).has_catalog ? ` · ${providerOf(l.store).name}` : '';
     opt.textContent = `${l.name}${where} (${l.count})`;
     opt.selected = l.slug === state.active_list;
     sel.appendChild(opt);

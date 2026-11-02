@@ -86,7 +86,7 @@ Or with Docker: `docker compose up -d`. Full details, including registering the 
 | Configuration | [python-dotenv](https://github.com/theskumar/python-dotenv) | Loads credentials from `.env` |
 | Front end | HTML5, CSS, vanilla JavaScript (ES2020) | One page, no build step, no framework |
 | Persistence | JSON files | One file per list, plus config, tokens, and orders |
-| Testing | [pytest](https://docs.pytest.org/) with Starlette `TestClient` | 290 tests, no network access |
+| Testing | [pytest](https://docs.pytest.org/) with Starlette `TestClient` | 292 tests, no network access |
 | Packaging | `pyproject.toml` with setuptools | `pip install -e .` and a `kroger-reorder` console script |
 | Automation | PowerShell 5.1 | Windows startup installer |
 | External API | [Kroger Public API](https://developer.kroger.com/) | Locations, Products, Cart, OAuth 2.0 |
@@ -283,7 +283,7 @@ Phones on the wifi open the app by its normal address either way; they never nee
 
 Click **+**, name the list and pick the store. A list for one of these stores works differently from a Kroger list, because none of them has a public API the app could fill a cart through:
 
-- Items are plain names. Type one in the **Add an item** box and press **Add**; there is no catalog search, photo or price. Items are keyed by their name, so adding "Bananas" twice gives one row.
+- Items are plain names. Type one in the **Add an item** box and press **Add**; there is no catalog search, photo or price. Items are keyed by their name, so adding "Bananas" twice gives one row with the quantity bumped.
 - **Import**, **Photo** and **Recipe** all work. The review table offers each line to add or skip, and **Use a different name…** in a row's dropdown renames it.
 - Instead of **Send to cart** the footer offers **Open at &lt;store&gt;**. The panel lists every checked item with a **Search at &lt;store&gt;** link that opens the store's site in a new tab, a link to the site itself, and **Copy list** for a plain-text version to paste into a notes app or a text message.
 

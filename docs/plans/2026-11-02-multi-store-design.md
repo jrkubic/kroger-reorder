@@ -32,7 +32,8 @@ once the walmart.io key is granted; v7 ships Walmart as a hand-off store so it i
 
 1. **Provider layer `kroger_reorder/stores.py`.** `Provider(key, name, has_catalog, search_url,
    home_url)` and `PROVIDERS` for `kroger` (catalog, no URLs), `aldi`, `meijer`, `walmart`
-   (`has_catalog=False`, search URL templates with `{term}`). `DEFAULT_STORE = "kroger"`.
+   (`has_catalog=False`, search URL templates with `{term}`). `DEFAULT_STORE = "kroger"` lives in
+   `storage.py` (which must not import the provider table) and is re-exported here.
    `provider(key)` raises `UnknownStore(key)`; `search_link(key, term)` URL-encodes the term;
    `item_key(name)` is the slug of a plain item's name and stands in for its UPC. The page reads
    the provider table from `/api/state` (`stores`).

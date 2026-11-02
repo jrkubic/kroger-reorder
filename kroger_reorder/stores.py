@@ -52,9 +52,13 @@ def provider(key: str) -> Provider:
 
 
 def search_link(key: str, term: str) -> str:
-    return provider(key).search_url.format(term=quote(term, safe=""))
+    p = provider(key)
+    if not p.search_url:
+        raise ValueError(f"{p.name} has no search link; its lists go to the cart")
+    return p.search_url.format(term=quote(term, safe=""))
 
 
 def item_key(name: str) -> str:
-    """Plain items have no UPC; the slug of the name is their identity, so "Bananas" twice is one row."""
+    """Plain items have no UPC; the slug of the name is their identity, so "Bananas" twice is one row.
+    Names that differ only in accents, case or punctuation share a key; that is the intended merge."""
     return slugify(name, fallback="item")

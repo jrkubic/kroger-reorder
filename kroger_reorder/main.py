@@ -359,9 +359,12 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
             if not name:
                 return error(400, NO_NAME)
             item = plain_item(name, new.quantity)
-            if not any(i.upc == item.upc for i in loaded.items):
+            existing = next((i for i in loaded.items if i.upc == item.upc), None)
+            if existing:
+                existing.quantity += item.quantity  # typing "Bananas" again means one more, as import does
+            else:
                 loaded.items.append(item)
-                storage.save_list(slug, loaded.name, loaded.items)
+            storage.save_list(slug, loaded.name, loaded.items)
             return list_payload(get_list(slug))
         if not new.upc:
             return error(400, NO_UPC)

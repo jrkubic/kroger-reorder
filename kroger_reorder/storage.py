@@ -143,16 +143,20 @@ class Storage:
             return ListLoad(slug, slug, [], warning=f"{exc}.{UNTOUCHED}")
         if raw is None:
             return None
-        if not isinstance(raw, dict) or "items" not in raw:
+        if not isinstance(raw, dict):
             return ListLoad(slug, slug, [], warning=f"{file} should be an object with a name and an items array.{UNTOUCHED}")
         name = str(raw.get("name") or slug)
-        store = str(raw.get("store") or DEFAULT_STORE)
+        # Read the store before any shape check: a damaged file still belongs to its store, and the
+        # recovery save must not quietly turn an Aldi list into a Kroger one.
+        store = str(raw.get("store") or DEFAULT_STORE).strip().lower()
+        if "items" not in raw:
+            return ListLoad(slug, name, [], warning=f"{file} should be an object with a name and an items array.{UNTOUCHED}", store=store)
         try:
             items = parse_items(raw["items"])
         except ValueError as exc:
             if "JSON array" in str(exc):
-                return ListLoad(slug, name, [], warning=f"{file} should be an object with a name and an items array.{UNTOUCHED}")
-            return ListLoad(slug, name, [], warning=f"{file} has an entry with unexpected or missing fields ({exc}).{UNTOUCHED}")
+                return ListLoad(slug, name, [], warning=f"{file} should be an object with a name and an items array.{UNTOUCHED}", store=store)
+            return ListLoad(slug, name, [], warning=f"{file} has an entry with unexpected or missing fields ({exc}).{UNTOUCHED}", store=store)
         return ListLoad(slug, name, items, store=store)
 
     def save_list(self, slug: str, name: str, items: list[Item], store: str | None = None) -> None:
