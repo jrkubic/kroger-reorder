@@ -24,7 +24,8 @@ from .kroger import KrogerError, NotSignedIn
 from .orders import build_order
 from .recipe import extract as extract_recipe, fetch_page, suggest as suggest_recipe
 from .settings import DEFAULT_PHOTO_MODEL
-from .storage import Item, ListLoad, Storage
+from .storage import DEFAULT_STORE, Item, ListLoad, Storage
+from .stores import PROVIDERS, Provider, UnknownStore, item_key, provider, search_link
 from .usage import profile_text, usage_profile
 from .vision import VisionError, analyze as analyze_photos
 
@@ -35,6 +36,8 @@ MAX_PHOTOS = 4
 MAX_PHOTO_BYTES = 6 * 1024 * 1024
 PHOTO_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 TRANSPORT_FAILURE_LIMIT = 3  # consecutive status-0 errors before a price refresh gives up
+NO_NAME = "Give the item a name."
+NO_UPC = "Search your store and pick a product."  # a Kroger list only holds catalog products
 
 
 def utc_now() -> str:
@@ -48,6 +51,7 @@ class StoreChoice(BaseModel):
 
 class ListName(BaseModel):
     name: str
+    store: str = DEFAULT_STORE  # only read when creating a list
 
 
 class ActiveChoice(BaseModel):
@@ -55,8 +59,9 @@ class ActiveChoice(BaseModel):
 
 
 class NewItem(BaseModel):
-    upc: str
+    upc: str = ""      # required on a Kroger list; ignored on a hand-off list, which keys items by name
     name: str
+    quantity: int = 1  # hand-off lists only; a Kroger add always starts at 1
     size: str | None = None  # Kroger sometimes sends null; stored as ""
     image: str | None = None
     price: float | None = None
@@ -101,7 +106,7 @@ class RecipeRequest(BaseModel):
 
 
 class ImportItem(BaseModel):
-    upc: str
+    upc: str = ""  # required on a Kroger list; ignored on a hand-off list
     name: str
     size: str | None = None  # Kroger sometimes sends null; stored as ""
     image: str | None = None
@@ -151,6 +156,11 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
     async def kroger_error(_: Request, exc: KrogerError):
         return error(502, kroger_message(exc))
 
+    @app.exception_handler(UnknownStore)
+    async def unknown_store(_: Request, exc: UnknownStore):
+        # From a create with a bad store, or a hand-edited list file naming one.
+        return error(400, exc.message)
+
     @app.exception_handler(ListNotFound)
     async def list_not_found(_: Request, exc: ListNotFound):
         return error(404, f"No list named '{exc.slug}'.")
@@ -179,11 +189,21 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
         return loaded
 
     def list_payload(loaded: ListLoad, **extra) -> dict:
-        return {"slug": loaded.slug, "name": loaded.name,
+        return {"slug": loaded.slug, "name": loaded.name, "store": loaded.store,
                 "items": [asdict(i) for i in loaded.items], "warning": loaded.warning, **extra}
 
     def lists_payload() -> dict:
         return {"lists": storage.list_lists(), "active_list": storage.active_list()}
+
+    def provider_of(loaded: ListLoad) -> Provider:
+        return provider(loaded.store)
+
+    def hand_off_refused(p: Provider) -> JSONResponse:
+        return error(400, f"This list is for {p.name}; use Open at {p.name} instead.")
+
+    def plain_item(name: str, quantity: int = 1, included: bool = True) -> Item:
+        """An item on a hand-off list: no UPC, size, image or price; keyed by its name."""
+        return Item(upc=item_key(name), name=name, size="", quantity=max(1, quantity), included=included)
 
     def store_id() -> str | None:
         return storage.load_config().get("store_id")
@@ -235,7 +255,9 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
         config = storage.load_config()
         store = {"store_id": config["store_id"], "store_name": config.get("store_name", "")} if config.get("store_id") else None
         return {"store": store, "signed_in": kroger.is_signed_in(), "photo_backend": photo_backend,
-                "public_url": public_url, **lists_payload()}
+                "public_url": public_url,
+                "stores": [{"key": p.key, "name": p.name, "has_catalog": p.has_catalog} for p in PROVIDERS.values()],
+                **lists_payload()}
 
     @app.get("/api/stores")
     def stores(zip: str):
@@ -273,7 +295,8 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
         name = clean_name(body.name)
         if not name:
             return error(400, "Give the list a name.")
-        return {"slug": storage.create_list(name)}
+        provider(body.store)  # 400 on an unknown store before anything is written
+        return {"slug": storage.create_list(name, body.store)}
 
     @app.patch("/api/lists/{slug}")
     def rename_list(slug: str, body: ListName):
@@ -331,6 +354,17 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
     @app.post("/api/lists/{slug}/items")
     def add_item(slug: str, new: NewItem):
         loaded = get_list(slug)
+        if not provider_of(loaded).has_catalog:
+            name = clean_name(new.name)
+            if not name:
+                return error(400, NO_NAME)
+            item = plain_item(name, new.quantity)
+            if not any(i.upc == item.upc for i in loaded.items):
+                loaded.items.append(item)
+                storage.save_list(slug, loaded.name, loaded.items)
+            return list_payload(get_list(slug))
+        if not new.upc:
+            return error(400, NO_UPC)
         if not any(i.upc == new.upc for i in loaded.items):
             # A price that came along with the add was fetched just now, so stamp it like a refresh would.
             checked = utc_now() if new.price is not None or new.promo is not None else None
@@ -355,10 +389,13 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
 
     @app.post("/api/lists/{slug}/prices")
     def refresh_prices(slug: str):
+        loaded = get_list(slug)
+        p = provider_of(loaded)
+        if not p.has_catalog:
+            return hand_off_refused(p)
         sid = store_id()
         if not sid:
             return error(400, "Pick a store first.")
-        loaded = get_list(slug)
         if not loaded.items:
             return list_payload(loaded, failed=0)
         fresh_by_upc: dict[str, dict] = {}
@@ -392,6 +429,9 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
     @app.post("/api/lists/{slug}/push")
     def push(slug: str, models: list[ItemModel]):
         loaded = get_list(slug)
+        p = provider_of(loaded)
+        if not p.has_catalog:
+            return hand_off_refused(p)  # before the body is saved: nothing changes on a refused push
         items = [Item(**m.model_dump()) for m in models]
         if models:
             storage.save_list(slug, loaded.name, items)
@@ -407,6 +447,20 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
         sent = [asdict(i) for i in chosen]
         order, warning = record_order(sent, list_slug=slug, list_name=loaded.name)
         return {"added": sent, "order": order, "warning": warning}
+
+    @app.get("/api/lists/{slug}/handoff")
+    def handoff(slug: str):
+        """What to shop for at a hand-off store: the checked items, each with a search link on the
+        store's site, plus a plain-text version for the clipboard."""
+        loaded = get_list(slug)
+        p = provider_of(loaded)
+        if p.has_catalog:
+            return error(400, "Kroger lists are sent to the cart instead.")
+        chosen = [i for i in loaded.items if i.included and i.quantity > 0]
+        lines = [f"- {i.name}" + (f" \u00d7{i.quantity}" if i.quantity > 1 else "") for i in chosen]
+        return {"store": p.key, "store_name": p.name, "home_url": p.home_url,
+                "items": [{"name": i.name, "quantity": i.quantity, "url": search_link(p.key, i.name)} for i in chosen],
+                "text": "\n".join([loaded.name, *lines])}
 
     # -- orders ------------------------------------------------------------------------
     @app.get("/api/orders")
@@ -522,6 +576,23 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
     def import_commit(slug: str, picks: list[ImportItem]):
         loaded = get_list(slug)
         by_upc = {i.upc: i for i in loaded.items}
+        if not provider_of(loaded).has_catalog:
+            # Only the name, quantity and check matter here; a Kroger export's UPC, image and prices do not.
+            for pick in picks:
+                name = clean_name(pick.name)
+                if not name:
+                    continue
+                key = item_key(name)
+                if key in by_upc:
+                    by_upc[key].quantity += max(1, pick.quantity)
+                else:
+                    by_upc[key] = plain_item(name, pick.quantity, pick.included)
+                    loaded.items.append(by_upc[key])
+            if picks:
+                storage.save_list(slug, loaded.name, loaded.items)
+            return list_payload(get_list(slug))
+        if any(not pick.upc for pick in picks):
+            return error(400, NO_UPC)
         for pick in picks:
             if pick.upc in by_upc:
                 by_upc[pick.upc].quantity += max(1, pick.quantity)

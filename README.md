@@ -352,7 +352,7 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/state` | Store, sign-in status, lists, active list, `photo_backend` (`"api"`, `"cli"`, or `null`), `public_url` |
+| `GET` | `/api/state` | Kroger store, sign-in status, lists (each with its `store`), active list, `photo_backend` (`"api"`, `"cli"`, or `null`), `public_url`, and `stores` (the stores a list can belong to) |
 | `GET` | `/api/stores?zip=` | Stores near a zip code |
 | `PUT` | `/api/store` | Choose a store |
 | `GET` | `/auth/login` | Redirect to Kroger OAuth |
@@ -363,7 +363,7 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/lists/{slug}` | Load a list |
-| `POST` | `/api/lists` | Create a list |
+| `POST` | `/api/lists` | Create a list; optional `store` (`kroger`, `aldi`, `meijer`, `walmart`) |
 | `PATCH` | `/api/lists/{slug}` | Rename |
 | `POST` | `/api/lists/{slug}/duplicate` | Copy under a new name |
 | `DELETE` | `/api/lists/{slug}` | Delete (refused for the last list) |
@@ -375,6 +375,7 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 | `POST` | `/api/lists/{slug}/prices` | Refresh prices from the catalog |
 | `POST` | `/api/lists/{slug}/push` | Send checked items to the cart; records an order |
 | `GET` | `/api/lists/{slug}/export.csv` | Download the list as CSV |
+| `GET` | `/api/lists/{slug}/handoff` | Hand-off list only: checked items with a search link each on the store's site, plus a text version |
 
 ### Import
 

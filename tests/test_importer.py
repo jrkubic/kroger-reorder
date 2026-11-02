@@ -122,3 +122,9 @@ def test_json_list_file_with_upcs_yields_exact_rows():
 
 def test_exact_row_without_name_is_skipped():
     assert parse("upc,name,quantity\n0001,,2\n") == []
+
+
+def test_exact_rows_need_a_numeric_upc():
+    # A hand-off list's export carries name keys in the upc column; those lines are matched by name again.
+    text = "upc,name,size,quantity,included,price,promo,image\nbananas,Bananas,,2,true,,,\n0001111041700,Milk,1 gal,1,true,3.49,,\n"
+    assert [(l.name, l.quantity, l.exact is not None) for l in parse(text)] == [("Bananas", 2, False), ("Milk", 1, True)]

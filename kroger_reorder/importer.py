@@ -17,8 +17,8 @@ TRAILING_QTY = re.compile(r"^(.+?)\s+[xX×]\s*(\d+)$")
 PAREN_QTY = re.compile(r"^(.+?)\s*\((\d+)\)$")
 NAME_KEYS = ("name", "item", "product", "description", "title")
 QTY_KEYS = ("quantity", "qty", "count", "amount")
-# Columns an exported CSV (or a list JSON file) carries. A row with a UPC is an exact product and
-# skips both quantity-in-name parsing and the Kroger search.
+# Columns an exported CSV (or a list JSON file) carries. A row with a numeric UPC is an exact product
+# and skips both quantity-in-name parsing and the Kroger search.
 UPC_KEY = "upc"
 EXACT_KEYS = ("size", "included", "price", "promo", "image")
 FALSE_WORDS = {"false", "0", "no", "n", "off", ""}
@@ -83,9 +83,11 @@ def _to_bool(value: Any) -> bool:
 
 
 def _exact(fields: dict[str, Any]) -> dict | None:
-    """Normalise the product columns of a row that carries a UPC; None when it doesn't."""
+    """Normalise the product columns of a row that carries a UPC; None when it doesn't.
+    Only an all-digit UPC counts: a hand-off list's export puts name keys in that column, and those
+    lines are matched by name again wherever they are imported."""
     upc = str(fields.get(UPC_KEY) or "").strip()
-    if not upc:
+    if not upc.isdigit():
         return None
     return {
         "upc": upc,

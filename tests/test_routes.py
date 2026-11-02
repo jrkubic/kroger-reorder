@@ -96,6 +96,10 @@ def test_initial_state_has_default_list(client):
         "lists": [{"slug": "standard", "name": "Standard", "count": 0, "store": "kroger"}],
         "active_list": "standard",
         "photo_backend": None, "public_url": "http://localhost:8000",
+        "stores": [{"key": "kroger", "name": "Kroger", "has_catalog": True},
+                   {"key": "aldi", "name": "Aldi", "has_catalog": False},
+                   {"key": "meijer", "name": "Meijer", "has_catalog": False},
+                   {"key": "walmart", "name": "Walmart", "has_catalog": False}],
     }
 
 
@@ -214,6 +218,98 @@ def test_create_list_and_switch_active(client):
 
 def test_create_list_rejects_blank_name(client):
     assert client.post("/api/lists", json={"name": "   "}).status_code == 400
+
+
+# -- other stores (hand-off lists) ------------------------------------------------------
+
+@pytest.fixture
+def aldi(client):
+    return client.post("/api/lists", json={"name": "Aldi run", "store": "aldi"}).json()["slug"]
+
+
+def test_create_list_with_a_store(client, aldi):
+    loaded = client.get(f"/api/lists/{aldi}").json()
+    assert loaded["store"] == "aldi" and loaded["name"] == "Aldi run"
+    assert client.get("/api/lists/standard").json()["store"] == "kroger"
+    r = client.post("/api/lists", json={"name": "X", "store": "costco"})
+    assert r.status_code == 400
+    assert r.json()["error"] == "Unknown store 'costco'. Choose Kroger, Aldi, Meijer, or Walmart."
+
+
+def test_duplicate_keeps_the_store(client, aldi):
+    copy = client.post(f"/api/lists/{aldi}/duplicate", json={"name": "Aldi copy"}).json()["slug"]
+    assert client.get(f"/api/lists/{copy}").json()["store"] == "aldi"
+
+
+def test_hand_edited_unknown_store_is_400_not_500(client, tmp_path):
+    (tmp_path / "lists" / "odd.json").write_text('{"name": "Odd", "store": "costco", "items": []}', encoding="utf-8")
+    r = client.post("/api/lists/odd/items", json={"name": "milk"})
+    assert r.status_code == 400 and r.json()["error"].startswith("Unknown store 'costco'")
+
+
+def test_plain_items_are_keyed_by_name_and_need_no_upc(client, aldi):
+    r = client.post(f"/api/lists/{aldi}/items", json={"name": " Bananas "})
+    assert r.status_code == 200
+    assert r.json()["items"] == [{"upc": "bananas", "name": "Bananas", "size": "", **FULL}]
+    client.post(f"/api/lists/{aldi}/items", json={"name": "bananas!", "quantity": 3})   # same key: no duplicate
+    assert len(client.get(f"/api/lists/{aldi}").json()["items"]) == 1
+    r = client.post(f"/api/lists/{aldi}/items", json={"name": "Eggs", "quantity": 2})
+    assert r.json()["items"][1]["quantity"] == 2
+    assert client.post(f"/api/lists/{aldi}/items", json={"name": "  "}).json()["error"] == "Give the item a name."
+    assert client.delete(f"/api/lists/{aldi}/items/bananas").json()["items"][0]["upc"] == "eggs"
+
+
+def test_kroger_list_still_requires_a_upc(client):
+    r = client.post("/api/lists/standard/items", json={"name": "Bananas"})
+    assert r.status_code == 400 and r.json()["error"] == "Search your store and pick a product."
+
+
+def test_push_and_prices_are_refused_on_a_hand_off_list(client, aldi, kroger, with_store):
+    kroger.signed_in = True
+    client.post(f"/api/lists/{aldi}/items", json={"name": "Bananas"})
+    r = client.post(f"/api/lists/{aldi}/push", json=[{"upc": "bananas", "name": "Bananas", "quantity": 5}])
+    assert r.status_code == 400 and r.json()["error"] == "This list is for Aldi; use Open at Aldi instead."
+    assert client.get(f"/api/lists/{aldi}").json()["items"][0]["quantity"] == 1   # the body was not saved
+    r = client.post(f"/api/lists/{aldi}/prices")
+    assert r.status_code == 400 and r.json()["error"] == "This list is for Aldi; use Open at Aldi instead."
+    assert kroger.cart_calls == [] and kroger.lookup_calls == []
+
+
+def test_import_into_a_hand_off_list_keys_by_name_and_drops_kroger_fields(client, aldi):
+    picks = [{"upc": "", "name": "Bananas", "quantity": 2},
+             {"upc": "0001111041700", "name": "Kroger Milk", "size": "1 gal", "image": "https://img/1.jpg",
+              "price": 3.49, "included": False, "quantity": 1},
+             {"name": "bananas", "quantity": 1},
+             {"name": "   "}]
+    r = client.post(f"/api/lists/{aldi}/import", json=picks)
+    assert r.status_code == 200
+    rows = [(i["upc"], i["name"], i["quantity"], i["included"], i["size"], i["image"], i["price"]) for i in r.json()["items"]]
+    assert rows == [("bananas", "Bananas", 3, True, "", None, None), ("kroger-milk", "Kroger Milk", 1, False, "", None, None)]
+
+
+def test_import_into_a_kroger_list_requires_upcs(client):
+    r = client.post("/api/lists/standard/import", json=[{"upc": "0001", "name": "Milk"}, {"name": "Bananas"}])
+    assert r.status_code == 400 and r.json()["error"] == "Search your store and pick a product."
+    assert client.get("/api/lists/standard").json()["items"] == []
+
+
+def test_handoff_lists_checked_items_with_search_links_and_text(client, aldi):
+    client.put(f"/api/lists/{aldi}/items", json=[
+        {"upc": "bananas", "name": "Bananas", "quantity": 2},
+        {"upc": "oat-milk", "name": "Oat milk & co", "quantity": 1},
+        {"upc": "chips", "name": "Chips", "quantity": 1, "included": False}])
+    r = client.get(f"/api/lists/{aldi}/handoff")
+    assert r.status_code == 200
+    assert r.json() == {
+        "store": "aldi", "store_name": "Aldi", "home_url": "https://www.aldi.us/",
+        "items": [{"name": "Bananas", "quantity": 2, "url": "https://www.aldi.us/store/aldi/s?k=Bananas"},
+                  {"name": "Oat milk & co", "quantity": 1, "url": "https://www.aldi.us/store/aldi/s?k=Oat%20milk%20%26%20co"}],
+        "text": "Aldi run\n- Bananas ×2\n- Oat milk & co"}
+
+
+def test_handoff_on_a_kroger_list_is_400(client):
+    r = client.get("/api/lists/standard/handoff")
+    assert r.status_code == 400 and r.json()["error"] == "Kroger lists are sent to the cart instead."
 
 
 def test_rename_list(client):
