@@ -14,14 +14,15 @@ from typing import Any
 LISTS_DIR = "lists"
 LEGACY_LIST = "list.json"
 DEFAULT_LIST_NAME = "Standard"
+DEFAULT_STORE = "kroger"  # the store a list belongs to when its file names none; see stores.py
 ORDERS_FILE = "orders.json"
 
 UNTOUCHED = " Showing an empty list; the file is untouched until you add an item."
 
 
-def slugify(name: str) -> str:
+def slugify(name: str, fallback: str = "list") -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return slug or "list"
+    return slug or fallback
 
 
 def _valid_slug(slug: str) -> bool:
