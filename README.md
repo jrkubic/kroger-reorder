@@ -456,6 +456,7 @@ Run once after setup, or after changes that touch the Kroger client:
 | v6 Recipe URL suggestions | [docs/plans/2026-10-29-recipe-url-design.md](docs/plans/2026-10-29-recipe-url-design.md) | [docs/plans/2026-10-29-recipe-url.md](docs/plans/2026-10-29-recipe-url.md) |
 | v6.1 Photos find gaps | [docs/plans/2026-10-30-photo-gaps-design.md](docs/plans/2026-10-30-photo-gaps-design.md) | built directly from the design |
 | v6.2 Review groups and search | [docs/plans/2026-10-30-review-groups-search-design.md](docs/plans/2026-10-30-review-groups-search-design.md) | built directly from the design |
+| v7 Lists for Aldi, Meijer and Walmart | [docs/plans/2026-11-02-multi-store-design.md](docs/plans/2026-11-02-multi-store-design.md) | [docs/plans/2026-11-02-multi-store.md](docs/plans/2026-11-02-multi-store.md) |
 
 ## Limitations
 
