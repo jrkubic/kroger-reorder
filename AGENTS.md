@@ -31,6 +31,7 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
 | `kroger_reorder/main.py` | FastAPI app factory `create_app()` and every HTTP route |
 | `kroger_reorder/kroger.py` | Kroger API client: OAuth, locations, products, cart |
 | `kroger_reorder/storage.py` | JSON persistence; `Storage(data_dir)` is the only way in |
+| `kroger_reorder/stores.py` | The stores a list can belong to: Kroger (catalog, cart) and the hand-off stores Aldi, Meijer, Walmart (search links) |
 | `kroger_reorder/settings.py` | `.env` / environment parsing; every setting has a default here |
 | `kroger_reorder/vision.py` | Shared Claude call (`complete()`: Anthropic SDK or Claude Code CLI) and photo suggestions |
 | `kroger_reorder/recipe.py` | Recipe URL suggestions: fetch, JSON-LD extraction, prompt; shares `vision.complete()` |
@@ -82,6 +83,10 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
   (CLI) fakes. The real `anthropic.Anthropic` is only reached when `api_key` is set and no fake is
   given.
 - `recipe.fetch_page()` must never hit the network in tests: pass `transport=` an `httpx.MockTransport`.
+- Every list has a `store` (`stores.PROVIDERS` key; missing in the file means Kroger). Routes branch on
+  `provider.has_catalog`: only Kroger lists have UPCs, catalog search, prices and Send to cart. Items on
+  a hand-off list are keyed by `stores.item_key(name)` in the `upc` field; `importer._exact` only treats
+  an all-digit `upc` as a catalog product for that reason.
 - `data/` under the checkout is the maintainer's live grocery data. Tests use `tmp_path`; manual
   Docker checks mount a scratch directory, never `./data`.
 - `.env` holds real credentials. Never print it, never commit it, never copy it into an image.
@@ -95,3 +100,7 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
 - Hiding the Photo button when no backend is configured: the dialog explains instead.
 - Importing raw ingredient lines without a Claude backend; scaling servings automatically (the note
   covers it).
+- Scraping aldi.us, meijer.com or walmart.com, or an Instacart integration, to fill those carts:
+  fragile and against their terms. Those stores are hand-off lists with search links. Walmart catalog
+  matching through the walmart.io affiliate API is planned once a key is granted.
+- Changing a list's store after creation (export, create, import instead).

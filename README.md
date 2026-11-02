@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/jrkubic/kroger-reorder/actions/workflows/ci.yml/badge.svg)](https://github.com/jrkubic/kroger-reorder/actions/workflows/ci.yml)
 
-A small self-hosted web app that fills your Kroger pickup cart from saved grocery lists in one click. Keep several named lists, see product photos and sale prices, import and export lists as CSV, and look back at everything you have sent to the cart. Checkout (pickup time, payment) still happens in the Kroger app or at kroger.com, because Kroger's public API stops at the cart.
+A small self-hosted web app that fills your Kroger pickup cart from saved grocery lists in one click. Keep several named lists, see product photos and sale prices, import and export lists as CSV, and look back at everything you have sent to the cart. Checkout (pickup time, payment) still happens in the Kroger app or at kroger.com, because Kroger's public API stops at the cart. Lists for Aldi, Meijer and Walmart live alongside: they hold plain items and open the store's own site with a search link per item, since those stores offer no public cart API.
 
 Runs on a Windows PC, a Mac, a Linux box, or in Docker; is reachable from every phone on the same wifi; and stores everything as plain JSON files you can read and edit.
 
@@ -53,9 +53,14 @@ Or with Docker: `docker compose up -d`. Full details, including registering the 
 
 ![The list picker showing two saved lists](img/saveorders.png)
 
+**Shop an Aldi, Meijer or Walmart list on the store's site.** Those lists hold plain items; **Open at Aldi** gives a search link per item and a copyable text list.
+
+![The Open at Aldi panel with a search link for each item and a Copy list button](img/handoff.png)
+
 ## Features
 
 - **Named lists.** Create, rename, duplicate, and delete lists. Check or uncheck items per trip and set quantities.
+- **Other stores.** A list can belong to Aldi, Meijer or Walmart instead of Kroger. Such a list holds plain item names and ends with **Open at &lt;store&gt;**: a search link per checked item on the store's own site plus a copyable text list. Import, Photo and Recipe work on them too.
 - **Catalog search.** Search your chosen store and add products with their photo, size, and price.
 - **Sale badges.** Promo prices show in green with the regular price struck through. Prices refresh in the background once a day or on demand.
 - **Send to cart.** Pushes every checked item to your Kroger cart through the official Cart API. Rejected items are highlighted so you can swap them.
@@ -81,7 +86,7 @@ Or with Docker: `docker compose up -d`. Full details, including registering the 
 | Configuration | [python-dotenv](https://github.com/theskumar/python-dotenv) | Loads credentials from `.env` |
 | Front end | HTML5, CSS, vanilla JavaScript (ES2020) | One page, no build step, no framework |
 | Persistence | JSON files | One file per list, plus config, tokens, and orders |
-| Testing | [pytest](https://docs.pytest.org/) with Starlette `TestClient` | 264 tests, no network access |
+| Testing | [pytest](https://docs.pytest.org/) with Starlette `TestClient` | 290 tests, no network access |
 | Packaging | `pyproject.toml` with setuptools | `pip install -e .` and a `kroger-reorder` console script |
 | Automation | PowerShell 5.1 | Windows startup installer |
 | External API | [Kroger Public API](https://developer.kroger.com/) | Locations, Products, Cart, OAuth 2.0 |
@@ -270,9 +275,19 @@ Phones on the wifi open the app by its normal address either way; they never nee
 
 ### List controls
 
-- **Dropdown** switches lists. **+** creates a list. The pencil renames the current list. The ⋯ menu duplicates or deletes it.
+- **Dropdown** switches lists; a list for another store shows the store after its name. **+** creates a list and asks which store it is for. The pencil renames the current list. The ⋯ menu duplicates or deletes it.
 - **Add an item** searches your store. Click a result to add it.
 - **Import** and **Export CSV** sit next to **Check prices**.
+
+### Lists for Aldi, Meijer and Walmart
+
+Click **+**, name the list and pick the store. A list for one of these stores works differently from a Kroger list, because none of them has a public API the app could fill a cart through:
+
+- Items are plain names. Type one in the **Add an item** box and press **Add**; there is no catalog search, photo or price. Items are keyed by their name, so adding "Bananas" twice gives one row.
+- **Import**, **Photo** and **Recipe** all work. The review table offers each line to add or skip, and **Use a different name…** in a row's dropdown renames it.
+- Instead of **Send to cart** the footer offers **Open at &lt;store&gt;**. The panel lists every checked item with a **Search at &lt;store&gt;** link that opens the store's site in a new tab, a link to the site itself, and **Copy list** for a plain-text version to paste into a notes app or a text message.
+
+The store is chosen when the list is created. To move a list to another store, **Export CSV**, create a list at the new store, and **Import** the file: the item names are matched again there. Hand-off trips are not recorded in order history. Walmart catalog matching and a one-click cart link are planned once Walmart grants the app an affiliate API key.
 
 ### Sale prices
 
@@ -326,7 +341,7 @@ Click **Export CSV** to download the current list as `<list>.csv` with these col
 upc,name,size,quantity,included,price,promo,image
 ```
 
-Open it in a spreadsheet, keep it as a backup, or share it. Importing that file into any list recreates the items exactly, including unchecked ones. Prices in the file are the last ones seen and refresh in the background after import.
+Open it in a spreadsheet, keep it as a backup, or share it. Importing that file into any Kroger list recreates the items exactly, including unchecked ones. Prices in the file are the last ones seen and refresh in the background after import. On an Aldi, Meijer or Walmart list the `upc` column holds a key made from the item's name, and importing such a file anywhere matches its lines by name.
 
 ## Data and privacy
 
@@ -334,7 +349,7 @@ Everything lives in `data/`, which is gitignored:
 
 | File | Contents |
 |---|---|
-| `lists/<slug>.json` | One file per list. Safe to edit by hand. |
+| `lists/<slug>.json` | One file per list, with the store it belongs to (`store`; missing means Kroger). Safe to edit by hand. |
 | `orders.json` | Order history, newest first. |
 | `config.json` | Chosen store and active list. |
 | `tokens.json` | Kroger OAuth tokens. Delete it to sign out. |
@@ -369,11 +384,11 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 | `DELETE` | `/api/lists/{slug}` | Delete (refused for the last list) |
 | `PUT` | `/api/active` | Set the active list |
 | `GET` | `/api/search?term=` | Search the store catalog |
-| `POST` | `/api/lists/{slug}/items` | Add one product |
+| `POST` | `/api/lists/{slug}/items` | Add one product (a plain `name` on an Aldi, Meijer or Walmart list) |
 | `PUT` | `/api/lists/{slug}/items` | Replace all items (quantities, checks) |
 | `DELETE` | `/api/lists/{slug}/items/{upc}` | Remove one item |
-| `POST` | `/api/lists/{slug}/prices` | Refresh prices from the catalog |
-| `POST` | `/api/lists/{slug}/push` | Send checked items to the cart; records an order |
+| `POST` | `/api/lists/{slug}/prices` | Refresh prices from the catalog (Kroger lists only) |
+| `POST` | `/api/lists/{slug}/push` | Send checked items to the cart; records an order (Kroger lists only) |
 | `GET` | `/api/lists/{slug}/export.csv` | Download the list as CSV |
 | `GET` | `/api/lists/{slug}/handoff` | Hand-off list only: checked items with a search link each on the store's site, plus a text version |
 
@@ -383,7 +398,7 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 |---|---|---|
 | `POST` | `/api/import/parse` | Text to lines (`name`, `quantity`, optional `exact`) |
 | `POST` | `/api/import/resolve` | Catalog candidates for each name |
-| `POST` | `/api/lists/{slug}/import` | Add the chosen picks to a list |
+| `POST` | `/api/lists/{slug}/import` | Add the chosen picks to a list (names alone on an Aldi, Meijer or Walmart list) |
 
 ### Photo and recipe suggestions, usage
 
@@ -445,6 +460,7 @@ Run once after setup, or after changes that touch the Kroger client:
 7. Export the list, create a second list, import the file into it, and compare.
 8. Open the **Orders** tab, expand the order from step 3, and send it again.
 9. **Recipe** → paste a link → rows tagged needed / staple / on list → **Add to list**.
+10. **+** → an Aldi list → add two items → **Open at Aldi**. The search links open aldi.us; **Copy list** copies the text.
 
 ## Design documents
 
@@ -468,6 +484,8 @@ These come from Kroger's public API, not from the app:
 - It cannot read past orders. History covers only what this app sent.
 - It has no access to digital coupons. Clip them in the Kroger app.
 - Sign-in works from the machine running the app, or from the address in `PUBLIC_URL`. Other devices share the stored tokens.
+
+And from the other stores: Aldi, Meijer and Walmart have no public API an individual can fill a cart with (Aldi's online shop runs on Instacart, whose developer platform is closed to new applications; Meijer has none; Walmart's affiliate API needs approval). Lists for those stores hand off to the store's site with a search link per item instead of filling a cart.
 
 ## Troubleshooting
 
@@ -500,6 +518,12 @@ These come from Kroger's public API, not from the app:
 | `Couldn't find a recipe on that page.` | Search results, category pages and pages that draw ingredients with scripts have nothing to read. Open the recipe itself, or use **Import**. |
 | `Claude couldn't find any ingredients on that page.` | The page text had no recognizable recipe. Use **Import** with the ingredients copied from the page. |
 | `No match for “...” at your store.` after **Search for a different item…** | Your store's catalog has nothing for that term. Try a broader or different wording; the row stays on Skip until a match is picked. |
+| `Unknown store '...'. Choose Kroger, Aldi, Meijer, or Walmart.` | A list file under `data/lists/` was edited to name a store the app does not know. Fix its `store` field. |
+| `Give the item a name.` | The **Add an item** box on an Aldi, Meijer or Walmart list was empty. |
+| `Search your store and pick a product.` | Something tried to add a bare name to a Kroger list; Kroger lists only hold catalog products. Use the search box, or create a list for another store. |
+| `This list is for Aldi; use Open at Aldi instead.` (or Meijer, Walmart) | **Send to cart** and **Check prices** only work on Kroger lists. Reload the page if the buttons are showing on another list. |
+| `Kroger lists are sent to the cart instead.` | **Open at &lt;store&gt;** was requested for a Kroger list. Use **Send to cart**. |
+| `Copy is not available here; select the text below and copy it.` | Browsers only allow one-click copy on `https://` or `localhost`. On a phone over plain http, the panel shows the text to select and copy by hand. |
 
 ## Resources
 
@@ -527,6 +551,7 @@ These come from Kroger's public API, not from the app:
 | 2026-10-29 | v6 | Recipe URL suggestions: paste a recipe link, Claude proposes the groceries, on-list and staple rows start on Skip |
 | 2026-10-30 | v6.1 | Photo suggestions look for gaps: low, missing, asked; stocked and on-list rows shown but preset to Skip; the current list is sent with the photos |
 | 2026-10-30 | v6.2 | Review table: Claude breaks categories into one row per product under a group heading; every row's dropdown can search the catalog for a different item |
+| 2026-11-02 | v7 | Lists for Aldi, Meijer and Walmart: a store per list, plain items, and an Open at store panel with a search link per item and a copyable list |
 
 ## License
 
