@@ -8,6 +8,7 @@ import csv
 import io
 import re
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,7 @@ from .vision import VisionError, analyze as analyze_photos
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 EXPORT_COLUMNS = ("upc", "name", "size", "quantity", "included", "price", "promo", "image")
 RESOLVE_CANDIDATES = 3
+ALDI_PARALLEL = 4  # aldi.us answers a search in about a second; a 30-line review should not take 30
 MAX_PHOTOS = 4
 MAX_PHOTO_BYTES = 6 * 1024 * 1024
 PHOTO_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
@@ -617,12 +619,21 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
             return no_catalog(p)
         if p.key == KROGER and not store_id():
             return error(400, "Pick a store first.")
-        matches, failed, last_error = [], 0, None
-        for name in body.names:
+        def lookup(name: str):
             try:
-                candidates = catalog_search(p, name)[:RESOLVE_CANDIDATES]
+                return catalog_search(p, name)[:RESOLVE_CANDIDATES], None
             except (KrogerError, AldiError) as exc:
-                candidates, failed, last_error = [], failed + 1, exc
+                return [], exc
+
+        if p.key == KROGER:   # sequential, as always: Kroger's API is rate limited per app
+            results = [lookup(name) for name in body.names]
+        else:
+            with ThreadPoolExecutor(max_workers=ALDI_PARALLEL) as pool:
+                results = list(pool.map(lookup, body.names))  # map keeps the input order
+        matches, failed, last_error = [], 0, None
+        for name, (candidates, exc) in zip(body.names, results):
+            if exc is not None:
+                failed, last_error = failed + 1, exc
             matches.append({"name": name, "candidates": candidates})
         if body.names and failed == len(body.names):
             # One name with no hits is normal; every name failing means the store's catalog is the problem.

@@ -109,12 +109,18 @@ class AldiClient:
                                            separators=(",", ":"))}
         headers = {"Accept": "application/json", "Referer": f"{SITE}{SEARCH_PAGE}"}
         try:
-            response = self._send(GRAPHQL, params, headers)
+            try:
+                response = self._send(GRAPHQL, params, headers)
+            except AldiError as exc:
+                if "HTTP 401" not in exc.message and "HTTP 403" not in exc.message:
+                    raise
+                self._session(refresh=True)          # an expired or rejected session: one fresh start
+                response = self._send(GRAPHQL, params, headers)
         except AldiError as exc:
-            if "HTTP 401" not in exc.message and "HTTP 403" not in exc.message:
-                raise
-            self._session(refresh=True)          # an expired or rejected session: one fresh start
-            response = self._send(GRAPHQL, params, headers)
+            # An unknown persisted-query hash is answered with HTTP 400 (PersistedQueryNotSupported).
+            if "HTTP 400" in exc.message:
+                raise AldiError(502, CHANGED) from exc
+            raise
         try:
             body = response.json()
         except ValueError:

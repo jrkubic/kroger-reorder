@@ -159,6 +159,16 @@ def test_changed_site(client, site, body):
     assert (exc.value.status, exc.value.message) == (502, CHANGED)
 
 
+def test_unknown_hash_http_400_is_a_changed_site(client, site):
+    # What aldi.us answered on 2026-11-05 for a hash it doesn't know.
+    site.overrides["SearchResultsPlacements"] = [httpx.Response(400, json={
+        "errors": [{"message": "PersistedQueryNotSupported", "extensions": {"code": "PERSISTED_QUERY_NOT_SUPPORTED"}}],
+        "data": None})]
+    with pytest.raises(AldiError) as exc:
+        client.search_products("milk")
+    assert exc.value.message == CHANGED
+
+
 def test_page_without_context_is_a_changed_site(client, site):
     site.overrides["page"] = [httpx.Response(200, text="<html>nothing here</html>")]
     with pytest.raises(AldiError) as exc:
