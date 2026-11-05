@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/jrkubic/kroger-reorder/actions/workflows/ci.yml/badge.svg)](https://github.com/jrkubic/kroger-reorder/actions/workflows/ci.yml)
 
-A small self-hosted web app that fills your Kroger pickup cart from saved grocery lists in one click. Keep several named lists, see product photos and sale prices, import and export lists as CSV, and look back at everything you have sent to the cart. Checkout (pickup time, payment) still happens in the Kroger app or at kroger.com, because Kroger's public API stops at the cart. Lists for Aldi, Meijer and Walmart live alongside: they hold plain items and open the store's own site with a search link per item, since those stores offer no public cart API.
+A small self-hosted web app that fills your Kroger pickup cart from saved grocery lists in one click. Keep several named lists, see product photos and sale prices, import and export lists as CSV, and look back at everything you have sent to the cart. Checkout (pickup time, payment) still happens in the Kroger app or at kroger.com, because Kroger's public API stops at the cart. Lists for Aldi, Meijer and Walmart live alongside. Aldi lists search Aldi's catalog with your store's prices and photos; all three end by opening the store's own site, since none of them offers a public cart API.
 
 Runs on a Windows PC, a Mac, a Linux box, or in Docker; is reachable from every phone on the same wifi; and stores everything as plain JSON files you can read and edit.
 
@@ -53,14 +53,19 @@ Or with Docker: `docker compose up -d`. Full details, including registering the 
 
 ![The list picker showing two saved lists](img/saveorders.png)
 
-**Shop an Aldi, Meijer or Walmart list on the store's site.** Those lists hold plain items; **Open at Aldi** gives a search link per item and a copyable text list.
+**Aldi lists search Aldi's catalog.** Results come from aldi.us for your nearest store, with photos and prices; anything the catalog lacks can be added as typed.
+
+![An Aldi list with catalog search results, prices, and plain items alongside](img/aldi.png)
+
+**Shop an Aldi, Meijer or Walmart list on the store's site.** **Open at Aldi** links each item to its product page or a search, and copies the list as text.
 
 ![The Open at Aldi panel with a search link for each item and a Copy list button](img/handoff.png)
 
 ## Features
 
 - **Named lists.** Create, rename, duplicate, and delete lists. Check or uncheck items per trip and set quantities.
-- **Other stores.** A list can belong to Aldi, Meijer or Walmart instead of Kroger. Such a list holds plain item names and ends with **Open at &lt;store&gt;**: a search link per checked item on the store's own site plus a copyable text list. Import, Photo and Recipe work on them too.
+- **Other stores.** A list can belong to Aldi, Meijer or Walmart instead of Kroger. Such a list ends with **Open at &lt;store&gt;**: a link per checked item on the store's own site plus a copyable text list. Import, Photo and Recipe work on them too.
+- **Aldi catalog.** Aldi lists search and match against aldi.us for your nearest store: product names, sizes, photos, prices and sale prices, refreshed like Kroger's. Items Aldi doesn't sell can still be added by name. Meijer and Walmart lists hold plain names.
 - **Catalog search.** Search your chosen store and add products with their photo, size, and price.
 - **Sale badges.** Promo prices show in green with the regular price struck through. Prices refresh in the background once a day or on demand.
 - **Send to cart.** Pushes every checked item to your Kroger cart through the official Cart API. Rejected items are highlighted so you can swap them.
@@ -86,10 +91,11 @@ Or with Docker: `docker compose up -d`. Full details, including registering the 
 | Configuration | [python-dotenv](https://github.com/theskumar/python-dotenv) | Loads credentials from `.env` |
 | Front end | HTML5, CSS, vanilla JavaScript (ES2020) | One page, no build step, no framework |
 | Persistence | JSON files | One file per list, plus config, tokens, and orders |
-| Testing | [pytest](https://docs.pytest.org/) with Starlette `TestClient` | 292 tests, no network access |
+| Testing | [pytest](https://docs.pytest.org/) with Starlette `TestClient` | 320 tests, no network access |
 | Packaging | `pyproject.toml` with setuptools | `pip install -e .` and a `kroger-reorder` console script |
 | Automation | PowerShell 5.1 | Windows startup installer |
 | External API | [Kroger Public API](https://developer.kroger.com/) | Locations, Products, Cart, OAuth 2.0 |
+| Aldi catalog | aldi.us (an Instacart storefront), read through its own GraphQL requests | Search, product details and prices for Aldi lists |
 | Claude | [`anthropic`](https://github.com/anthropics/anthropic-sdk-python) SDK, or [Claude Code](https://code.claude.com/docs) run headlessly (`claude -p`) | Photo analysis and recipe suggestions: API key, or the host's Claude subscription |
 | Containers | Docker, docker compose | Optional self-hosting path |
 | CI | GitHub Actions | pytest on Windows, Ubuntu, macOS × Python 3.12, 3.13; Docker build |
@@ -283,11 +289,21 @@ Phones on the wifi open the app by its normal address either way; they never nee
 
 ### Lists for Aldi, Meijer and Walmart
 
-Click **+**, name the list and pick the store. A list for one of these stores works differently from a Kroger list, because none of them has a public API the app could fill a cart through:
+Click **+**, name the list and pick the store. None of these stores has a public API the app could fill a cart through, so their lists end on the store's own site instead of in a cart.
 
-- Items are plain names. Type one in the **Add an item** box and press **Add**; there is no catalog search, photo or price. Items are keyed by their name, so adding "Bananas" twice gives one row with the quantity bumped.
-- **Import**, **Photo** and **Recipe** all work. The review table offers each line to add or skip, and **Use a different name…** in a row's dropdown renames it.
-- Instead of **Send to cart** the footer offers **Open at &lt;store&gt;**. The panel lists every checked item with a **Search at &lt;store&gt;** link that opens the store's site in a new tab, a link to the site itself, and **Copy list** for a plain-text version to paste into a notes app or a text message.
+**Aldi lists** search Aldi's catalog:
+
+- The **Add an item** box searches aldi.us and shows products with photo, size and price for the Aldi store nearest the computer running the app (the line under the list names it, for example "ALDI - SPR 20 - Marysville, prices from aldi.us"). The last result is always **Add “…” as typed**, for things Aldi doesn't sell or you don't want matched.
+- **Import**, **Photo** and **Recipe** match every line against Aldi, three candidates per row plus **Add “…” as typed**, and **Search for a different item…** re-searches a row. Lookups run four at a time, so a 30-line review takes several seconds.
+- **Check prices** and the daily background refresh update matched products in one request. Sale prices show in green with the regular price struck through, as on Kroger lists.
+- If aldi.us can't be read, the list keeps working as a plain list: search offers only **Add “…” as typed** and the review table offers each line by name, with the reason shown.
+
+**Meijer and Walmart lists** hold plain names. Type one in the **Add an item** box and press **Add**. The review table offers each line to add or skip, and **Use a different name…** renames a row.
+
+On every one of these lists:
+
+- Items without a product are keyed by their name, so adding "Bananas" twice gives one row with the quantity bumped.
+- Instead of **Send to cart** the footer offers **Open at &lt;store&gt;**. The panel lists every checked item with a link that opens in a new tab: the product's own page for a matched Aldi product, otherwise a search on the store's site. It also links to the site itself and has **Copy list** for a plain-text version to paste into a notes app or a text message.
 
 The store is chosen when the list is created. To move a list to another store, **Export CSV**, create a list at the new store, and **Import** the file: the item names are matched again there. Hand-off trips are not recorded in order history. Walmart catalog matching and a one-click cart link are planned once Walmart grants the app an affiliate API key.
 
@@ -343,7 +359,7 @@ Click **Export CSV** to download the current list as `<list>.csv` with these col
 upc,name,size,quantity,included,price,promo,image
 ```
 
-Open it in a spreadsheet, keep it as a backup, or share it. Importing that file into any Kroger list recreates the items exactly, including unchecked ones. Prices in the file are the last ones seen and refresh in the background after import. On an Aldi, Meijer or Walmart list the `upc` column holds a key made from the item's name, and importing such a file anywhere matches its lines by name.
+Open it in a spreadsheet, keep it as a backup, or share it. Importing that file into any Kroger list recreates the items exactly, including unchecked ones. Prices in the file are the last ones seen and refresh in the background after import. On an Aldi, Meijer or Walmart list the `upc` column holds Aldi's product id for a matched Aldi product, or a key made from the item's name otherwise. Import such a file into an Aldi, Meijer or Walmart list, where every line is matched by name again; imported into a Kroger list, Aldi's numeric ids would be taken for Kroger UPCs.
 
 ## Data and privacy
 
@@ -359,7 +375,7 @@ Everything lives in `data/`, which is gitignored:
 
 An unreadable or malformed file is shown as a warning and moved aside as `<file>.corrupt-<timestamp>` before the app writes to it again. Nothing is ever deleted automatically.
 
-Credentials stay in `.env`, also gitignored. Nothing leaves your machine except calls to `api.kroger.com`; for photo suggestions, the photos and note sent to Anthropic or Claude Code; and for recipe suggestions, the fetch of the recipe page by the computer running the app, plus the ingredient lines, the chosen list's item names, and your note sent to Anthropic or Claude Code. The page has no login; it trusts your home network, so do not expose port 8000 to the internet.
+Credentials stay in `.env`, also gitignored. Nothing leaves your machine except calls to `api.kroger.com`; for Aldi lists, the search terms and product ids sent to `www.aldi.us` (read-only: the app never signs in there); for photo suggestions, the photos and note sent to Anthropic or Claude Code; and for recipe suggestions, the fetch of the recipe page by the computer running the app, plus the ingredient lines, the chosen list's item names, and your note sent to Anthropic or Claude Code. The page has no login; it trusts your home network, so do not expose port 8000 to the internet.
 
 ## HTTP API
 
@@ -463,7 +479,7 @@ Run once after setup, or after changes that touch the Kroger client:
 7. Export the list, create a second list, import the file into it, and compare.
 8. Open the **Orders** tab, expand the order from step 3, and send it again.
 9. **Recipe** → paste a link → rows tagged needed / staple / on list → **Add to list**.
-10. **+** → an Aldi list → add two items → **Open at Aldi**. The search links open aldi.us; **Copy list** copies the text.
+10. **+** → an Aldi list → search `whole milk` and pick one, add `birthday candles` as typed → **Check prices** → **Open at Aldi**. The milk links to its product page, the candles to a search; **Copy list** copies the text.
 
 ## Design documents
 
@@ -489,7 +505,13 @@ These come from Kroger's public API, not from the app:
 - It has no access to digital coupons. Clip them in the Kroger app.
 - Sign-in works from the machine running the app, or from the address in `PUBLIC_URL`. Other devices share the stored tokens.
 
-And from the other stores: Aldi, Meijer and Walmart have no public API an individual can fill a cart with (Aldi's online shop runs on Instacart, whose developer platform is closed to new applications; Meijer has none; Walmart's affiliate API needs approval). Lists for those stores hand off to the store's site with a search link per item instead of filling a cart.
+And from the other stores: Aldi, Meijer and Walmart have no public API an individual can fill a cart with (Aldi's online shop runs on Instacart, whose developer platform is closed to new applications; Meijer has none; Walmart's affiliate API needs approval). Lists for those stores hand off to the store's site instead of filling a cart.
+
+Aldi's catalog has no public API either. The app reads it the way the aldi.us search page does, by repeating the page's own requests, which Instacart's terms of use do not permit; this is a personal, read-only tool and makes a handful of requests per search. Expect, from that:
+
+- It can stop working whenever Instacart changes the site. Aldi lists then fall back to plain names (see [Troubleshooting](#troubleshooting)).
+- Prices are aldi.us online prices, which Instacart may set above shelf prices.
+- The store is the one aldi.us picks for the computer running the app's internet connection; it can't be chosen in the app yet.
 
 ## Troubleshooting
 
@@ -525,7 +547,14 @@ And from the other stores: Aldi, Meijer and Walmart have no public API an indivi
 | `Unknown store '...'. Choose Kroger, Aldi, Meijer, or Walmart.` | A list file under `data/lists/` was edited to name a store the app does not know. Fix its `store` field. |
 | `Give the item a name.` | The **Add an item** box on an Aldi, Meijer or Walmart list was empty. |
 | `Search your store and pick a product.` | Something tried to add a bare name to a Kroger list; Kroger lists only hold catalog products. Use the search box, or create a list for another store. |
-| `This list is for Aldi; use Open at Aldi instead.` (or Meijer, Walmart) | **Send to cart** and **Check prices** only work on Kroger lists. Reload the page if the buttons are showing on another list. |
+| `This list is for Aldi; use Open at Aldi instead.` (or Meijer, Walmart) | **Send to cart** only works on Kroger lists, and **Check prices** on Kroger and Aldi lists. Reload the page if the buttons are showing on another list. |
+| `Aldi's site changed; Aldi lists work as plain lists until the app is updated.` | Instacart renamed the requests the app repeats. Aldi lists keep working by name. To restore search: open https://www.aldi.us/store/aldi/s?k=milk in a desktop browser with the developer tools' Network tab open, filter on `graphql`, and copy the `sha256Hash` from the `SearchResultsPlacements` request into `ALDI_SEARCH_HASH` in `.env` (and from `Items` into `ALDI_ITEMS_HASH`, from `GetRetailerLocationAddress` into `ALDI_LOCATION_HASH` if those fail too), then restart. Or update the app. |
+| `Couldn't reach aldi.us: ...` | The computer running the app can't reach the site. Check its connection; Aldi lists keep working by name meanwhile. |
+| `Aldi's site said HTTP ...` | aldi.us refused the request. Try again in a few minutes; if it persists the site may be blocking automated reads, and Aldi lists keep working by name. |
+| `Couldn't look up any items: ...` | Every line of an import failed to match at the store; the message after the colon says why. On an Aldi list the review falls back to plain names. |
+| `Couldn't check prices: ...` | A price check failed for every item; the message after the colon says why. |
+| `Meijer lists have no catalog; add items by name.` (or Walmart) | A catalog search was requested for a store without one. Reload the page. |
+| `Aldi isn't configured.` | The app was started without its Aldi client (only in tests or custom setups). Start it with `python -m kroger_reorder`. |
 | `Kroger lists are sent to the cart instead.` | **Open at &lt;store&gt;** was requested for a Kroger list. Use **Send to cart**. |
 | `Copy is not available here; select the text below and copy it.` | Browsers only allow one-click copy on `https://` or `localhost`. On a phone over plain http, the panel shows the text to select and copy by hand. |
 
@@ -556,6 +585,7 @@ And from the other stores: Aldi, Meijer and Walmart have no public API an indivi
 | 2026-10-30 | v6.1 | Photo suggestions look for gaps: low, missing, asked; stocked and on-list rows shown but preset to Skip; the current list is sent with the photos |
 | 2026-10-30 | v6.2 | Review table: Claude breaks categories into one row per product under a group heading; every row's dropdown can search the catalog for a different item |
 | 2026-11-02 | v7 | Lists for Aldi, Meijer and Walmart: a store per list, plain items, and an Open at store panel with a search link per item and a copyable list |
+| 2026-11-05 | v7.1 | Aldi catalog: Aldi lists search and match against aldi.us with your store's photos, sizes and prices; product-page links in Open at Aldi; plain fallback when the site changes |
 
 ## License
 
