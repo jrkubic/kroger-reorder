@@ -1,7 +1,9 @@
 # kroger_reorder/stores.py
-"""The stores a list can belong to. Kroger has a catalog and a cart API; the others are hand-off
-stores: the app keeps plain items and opens the store's own site to shop them, because none of them
-offers a public API an individual can fill a cart with (see docs/plans/2026-11-02-multi-store-design.md)."""
+"""The stores a list can belong to. Kroger has a catalog and a cart API. Aldi has a catalog (read from
+aldi.us, see aldi.py) but no cart. Meijer and Walmart have neither. Every store without a cart is a
+hand-off store: the list is shopped on the store's own site through "Open at <store>", and plain items
+(names with no product) are allowed on it. See docs/plans/2026-11-02-multi-store-design.md and
+docs/plans/2026-11-05-aldi-catalog-design.md."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,21 +16,26 @@ from .storage import DEFAULT_STORE, slugify
 class Provider:
     key: str
     name: str
-    has_catalog: bool               # True: UPCs, catalog search, prices, Send to cart (Kroger only)
+    catalog: bool                   # product search, matching and prices (needs the store's client)
+    cart: bool                      # Send to cart; only these lists require catalog products
     search_url: str | None = None   # "{term}" is replaced by the URL-encoded search term
     home_url: str | None = None
+    product_url: str | None = None  # "{id}" is replaced by a catalog product id, for Open at <store>
 
 
 PROVIDERS: dict[str, Provider] = {p.key: p for p in (
-    Provider("kroger", "Kroger", True),
-    Provider("aldi", "Aldi", False, "https://www.aldi.us/store/aldi/s?k={term}", "https://www.aldi.us/"),
-    Provider("meijer", "Meijer", False, "https://www.meijer.com/shopping/search.html?text={term}", "https://www.meijer.com/"),
-    Provider("walmart", "Walmart", False, "https://www.walmart.com/search?q={term}", "https://www.walmart.com/"),
+    Provider("kroger", "Kroger", catalog=True, cart=True),
+    Provider("aldi", "Aldi", catalog=True, cart=False, search_url="https://www.aldi.us/store/aldi/s?k={term}",
+             home_url="https://www.aldi.us/", product_url="https://www.aldi.us/store/aldi/products/{id}"),
+    Provider("meijer", "Meijer", catalog=False, cart=False,
+             search_url="https://www.meijer.com/shopping/search.html?text={term}", home_url="https://www.meijer.com/"),
+    Provider("walmart", "Walmart", catalog=False, cart=False,
+             search_url="https://www.walmart.com/search?q={term}", home_url="https://www.walmart.com/"),
 )}
-assert DEFAULT_STORE in PROVIDERS and PROVIDERS[DEFAULT_STORE].has_catalog
+assert DEFAULT_STORE in PROVIDERS and PROVIDERS[DEFAULT_STORE].cart
 
 __all__ = ["DEFAULT_STORE", "PROVIDERS", "Provider", "UnknownStore", "item_key", "provider", "search_link",
-           "store_names"]
+           "shop_link", "store_names"]
 
 
 def store_names() -> str:
@@ -56,6 +63,14 @@ def search_link(key: str, term: str) -> str:
     if not p.search_url:
         raise ValueError(f"{p.name} has no search link; its lists go to the cart")
     return p.search_url.format(term=quote(term, safe=""))
+
+
+def shop_link(key: str, upc: str, name: str) -> str:
+    """Where Open at <store> sends an item: its product page when it is a catalog product, else a search."""
+    p = provider(key)
+    if p.product_url and upc.isdigit():
+        return p.product_url.format(id=upc)
+    return search_link(key, name)
 
 
 def item_key(name: str) -> str:

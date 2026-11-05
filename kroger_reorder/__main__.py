@@ -19,6 +19,7 @@ from pathlib import Path
 import uvicorn
 
 from . import __version__
+from .aldi import AldiClient
 from .kroger import KrogerClient
 from .main import create_app
 from .recipe import suggest as suggest_recipe
@@ -83,9 +84,11 @@ def main(argv: list[str] | None = None) -> None:
         return
     storage = Storage(settings.data_dir)
     kroger = KrogerClient(settings.client_id, settings.client_secret, settings.redirect_uri, storage)
+    aldi = AldiClient(search_hash=settings.aldi_search_hash, items_hash=settings.aldi_items_hash,
+                      location_hash=settings.aldi_location_hash)  # nothing is fetched until an Aldi list searches
     backend = choose_backend(api_key=settings.anthropic_api_key)  # startup snapshot; the page shows this, requests re-check per call
     app = create_app(
-        storage, kroger,
+        storage, kroger, aldi=aldi,
         photo_model=settings.photo_model, photo_timeout=settings.photo_timeout,
         analyzer=partial(analyze, api_key=settings.anthropic_api_key),
         recipe_suggester=partial(suggest_recipe, api_key=settings.anthropic_api_key),

@@ -19,13 +19,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .aldi import AldiError
 from .importer import parse as parse_import
 from .kroger import KrogerError, NotSignedIn
 from .orders import build_order
 from .recipe import extract as extract_recipe, fetch_page, suggest as suggest_recipe
 from .settings import DEFAULT_PHOTO_MODEL
 from .storage import DEFAULT_STORE, Item, ListLoad, Storage
-from .stores import PROVIDERS, Provider, UnknownStore, item_key, provider, search_link
+from .stores import DEFAULT_STORE as KROGER, PROVIDERS, Provider, UnknownStore, item_key, provider, shop_link
 from .usage import profile_text, usage_profile
 from .vision import VisionError, analyze as analyze_photos
 
@@ -86,6 +87,7 @@ class ImportText(BaseModel):
 
 class ResolveRequest(BaseModel):
     names: list[str]
+    store: str = DEFAULT_STORE  # whose catalog to match against
 
 
 class Photo(BaseModel):
@@ -129,11 +131,12 @@ class OrderNotFound(Exception):
         self.order_id = order_id
 
 
-def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MODEL, photo_timeout: float = 90.0,
+def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAULT_PHOTO_MODEL, photo_timeout: float = 90.0,
                analyzer=analyze_photos, page_fetcher=fetch_page, recipe_suggester=suggest_recipe,
                photo_backend: str | None = None,
                public_url: str = "http://localhost:8000") -> FastAPI:
-    """`kroger` is a KrogerClient or anything with the same methods (tests pass a fake).
+    """`kroger` is a KrogerClient or anything with the same methods (tests pass a fake). `aldi` is an
+    AldiClient or a fake; without one, Aldi lists work as plain lists.
     `analyzer` has the signature of vision.analyze; tests pass a fake so nothing external is called.
     `page_fetcher(url) -> recipe.Page` and `recipe_suggester(...)` are the recipe equivalents of `analyzer`.
     `photo_backend` ('api' | 'cli' | None) and `public_url` are reported to the page via /api/state."""
@@ -155,6 +158,10 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
     @app.exception_handler(KrogerError)
     async def kroger_error(_: Request, exc: KrogerError):
         return error(502, kroger_message(exc))
+
+    @app.exception_handler(AldiError)
+    async def aldi_error(_: Request, exc: AldiError):
+        return error(502, exc.message)
 
     @app.exception_handler(UnknownStore)
     async def unknown_store(_: Request, exc: UnknownStore):
@@ -197,6 +204,19 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
 
     def provider_of(loaded: ListLoad) -> Provider:
         return provider(loaded.store)
+
+    def has_catalog(p: Provider) -> bool:
+        """A catalog store whose client is available. Aldi without a client behaves as a plain store."""
+        return p.catalog and (p.key == KROGER or aldi is not None)
+
+    def catalog_search(p: Provider, term: str) -> list[dict]:
+        """Raises KrogerError / AldiError; the caller has checked has_catalog and, for Kroger, the store."""
+        if p.key == KROGER:
+            return kroger.search_products(term, store_id())
+        return aldi.search_products(term)
+
+    def no_catalog(p: Provider) -> JSONResponse:
+        return error(400, f"{p.name} lists have no catalog; add items by name.")
 
     def hand_off_refused(p: Provider) -> JSONResponse:
         return error(400, f"This list is for {p.name}; use Open at {p.name} instead.")
@@ -256,7 +276,8 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
         store = {"store_id": config["store_id"], "store_name": config.get("store_name", "")} if config.get("store_id") else None
         return {"store": store, "signed_in": kroger.is_signed_in(), "photo_backend": photo_backend,
                 "public_url": public_url,
-                "stores": [{"key": p.key, "name": p.name, "has_catalog": p.has_catalog} for p in PROVIDERS.values()],
+                "stores": [{"key": p.key, "name": p.name, "catalog": has_catalog(p), "cart": p.cart}
+                           for p in PROVIDERS.values()],
                 **lists_payload()}
 
     @app.get("/api/stores")
@@ -283,11 +304,19 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
         return RedirectResponse("/")
 
     @app.get("/api/search")
-    def search(term: str):
-        sid = store_id()
-        if not sid:
+    def search(term: str, store: str = DEFAULT_STORE):
+        p = provider(store)
+        if not has_catalog(p):
+            return no_catalog(p)
+        if p.key == KROGER and not store_id():
             return error(400, "Pick a store first.")
-        return {"results": kroger.search_products(term, sid)}
+        return {"results": catalog_search(p, term)}
+
+    @app.get("/api/aldi/store")
+    def aldi_store():
+        if aldi is None:
+            return error(400, "Aldi isn't configured.")
+        return {"store": aldi.store()}
 
     # -- lists ------------------------------------------------------------------------------
     @app.post("/api/lists")
@@ -354,7 +383,8 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
     @app.post("/api/lists/{slug}/items")
     def add_item(slug: str, new: NewItem):
         loaded = get_list(slug)
-        if not provider_of(loaded).has_catalog:
+        p = provider_of(loaded)
+        if not p.cart and not (new.upc and has_catalog(p)):  # a plain item: only lists without a cart take them
             name = clean_name(new.name)
             if not name:
                 return error(400, NO_NAME)
@@ -394,8 +424,10 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
     def refresh_prices(slug: str):
         loaded = get_list(slug)
         p = provider_of(loaded)
-        if not p.has_catalog:
+        if not has_catalog(p):
             return hand_off_refused(p)
+        if p.key != KROGER:
+            return refresh_catalog_prices(slug, loaded)
         sid = store_id()
         if not sid:
             return error(400, "Pick a store first.")
@@ -429,11 +461,30 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
         # `failed` is the number of items we set out to check and couldn't, including any skipped after bailing out.
         return list_payload(get_list(slug), failed=len(loaded.items) - len(fresh_by_upc))
 
+    def refresh_catalog_prices(slug: str, loaded: ListLoad):
+        """Aldi: one batched lookup for every catalog product on the list; plain items are left alone."""
+        wanted = [i.upc for i in loaded.items if i.upc.isdigit()]
+        if not wanted:
+            return list_payload(loaded, failed=0)
+        try:
+            fresh_by_upc = aldi.lookup_products(wanted)
+        except AldiError as exc:
+            return error(502, f"Couldn't check prices: {exc.message}")
+        now = utc_now()
+        current = get_list(slug)  # merge into the list as it is now, as the Kroger path does
+        for item in current.items:
+            fresh = fresh_by_upc.get(item.upc)
+            if fresh:
+                item.price, item.promo, item.price_checked_at = fresh.get("price"), fresh.get("promo"), now
+                item.image = fresh.get("image") or item.image
+        storage.save_list(slug, current.name, current.items)
+        return list_payload(get_list(slug), failed=len(set(wanted)) - len(set(wanted) & set(fresh_by_upc)))
+
     @app.post("/api/lists/{slug}/push")
     def push(slug: str, models: list[ItemModel]):
         loaded = get_list(slug)
         p = provider_of(loaded)
-        if not p.has_catalog:
+        if not p.cart:
             return hand_off_refused(p)  # before the body is saved: nothing changes on a refused push
         items = [Item(**m.model_dump()) for m in models]
         if models:
@@ -457,12 +508,13 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
         store's site, plus a plain-text version for the clipboard."""
         loaded = get_list(slug)
         p = provider_of(loaded)
-        if p.has_catalog:
+        if p.cart:
             return error(400, "Kroger lists are sent to the cart instead.")
         chosen = [i for i in loaded.items if i.included and i.quantity > 0]
         lines = [f"- {i.name}" + (f" \u00d7{i.quantity}" if i.quantity > 1 else "") for i in chosen]
         return {"store": p.key, "store_name": p.name, "home_url": p.home_url,
-                "items": [{"name": i.name, "quantity": i.quantity, "url": search_link(p.key, i.name)} for i in chosen],
+                "items": [{"name": i.name, "quantity": i.quantity, "url": shop_link(p.key, i.upc, i.name)}
+                          for i in chosen],
                 "text": "\n".join([loaded.name, *lines])}
 
     # -- orders ------------------------------------------------------------------------
@@ -560,37 +612,50 @@ def create_app(storage: Storage, kroger, *, photo_model: str = DEFAULT_PHOTO_MOD
 
     @app.post("/api/import/resolve")
     def import_resolve(body: ResolveRequest):
-        sid = store_id()
-        if not sid:
+        p = provider(body.store)
+        if not has_catalog(p):
+            return no_catalog(p)
+        if p.key == KROGER and not store_id():
             return error(400, "Pick a store first.")
         matches, failed, last_error = [], 0, None
         for name in body.names:
             try:
-                candidates = kroger.search_products(name, sid)[:RESOLVE_CANDIDATES]
-            except KrogerError as exc:
+                candidates = catalog_search(p, name)[:RESOLVE_CANDIDATES]
+            except (KrogerError, AldiError) as exc:
                 candidates, failed, last_error = [], failed + 1, exc
             matches.append({"name": name, "candidates": candidates})
         if body.names and failed == len(body.names):
-            # One name with no hits is normal; every name failing means Kroger itself is the problem.
-            return error(502, f"Couldn't look up any items: {kroger_message(last_error)}")
+            # One name with no hits is normal; every name failing means the store's catalog is the problem.
+            reason = kroger_message(last_error) if isinstance(last_error, KrogerError) else last_error.message
+            return error(502, f"Couldn't look up any items: {reason}")
         return {"matches": matches}
 
     @app.post("/api/lists/{slug}/import")
     def import_commit(slug: str, picks: list[ImportItem]):
         loaded = get_list(slug)
         by_upc = {i.upc: i for i in loaded.items}
-        if not provider_of(loaded).has_catalog:
-            # Only the name, quantity and check matter here; a Kroger export's UPC, image and prices do not.
+        p = provider_of(loaded)
+        if not p.cart:
+            # Catalog products (a numeric id from this store's catalog) are kept whole; anything else
+            # becomes a plain item where only the name, quantity and check matter.
+            catalog = has_catalog(p)
             for pick in picks:
                 name = clean_name(pick.name)
                 if not name:
                     continue
-                key = item_key(name)
+                product = catalog and pick.upc.isdigit()
+                key = pick.upc if product else item_key(name)
                 if key in by_upc:
                     by_upc[key].quantity += max(1, pick.quantity)
+                    continue
+                if product:
+                    by_upc[key] = Item(upc=key, name=name, size=pick.size or "", image=pick.image,
+                                       quantity=max(1, pick.quantity), included=pick.included,
+                                       price=pick.price, promo=pick.promo,
+                                       price_checked_at=utc_now() if pick.price is not None or pick.promo is not None else None)
                 else:
                     by_upc[key] = plain_item(name, pick.quantity, pick.included)
-                    loaded.items.append(by_upc[key])
+                loaded.items.append(by_upc[key])
             if picks:
                 storage.save_list(slug, loaded.name, loaded.items)
             return list_payload(get_list(slug))

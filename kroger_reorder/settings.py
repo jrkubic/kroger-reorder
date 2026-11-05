@@ -26,6 +26,10 @@ class Settings:
     photo_model: str = DEFAULT_PHOTO_MODEL   # model for photo suggestions (API or Claude Code)
     photo_timeout: float = DEFAULT_PHOTO_TIMEOUT  # seconds before a photo analysis is abandoned
     anthropic_api_key: str | None = None  # set -> photo and recipe suggestions go to the Anthropic API; unset -> Claude Code CLI
+    # Replacement persisted-query hashes for aldi.us when Instacart changes them; None -> aldi.py's constants.
+    aldi_search_hash: str | None = None
+    aldi_items_hash: str | None = None
+    aldi_location_hash: str | None = None
 
     @property
     def redirect_uri(self) -> str:
@@ -78,4 +82,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         photo_model=(env.get("PHOTO_MODEL") or DEFAULT_PHOTO_MODEL).strip(),
         photo_timeout=photo_timeout,
         anthropic_api_key=api_key,
+        aldi_search_hash=(env.get("ALDI_SEARCH_HASH") or "").strip() or None,
+        aldi_items_hash=(env.get("ALDI_ITEMS_HASH") or "").strip() or None,
+        aldi_location_hash=(env.get("ALDI_LOCATION_HASH") or "").strip() or None,
     )

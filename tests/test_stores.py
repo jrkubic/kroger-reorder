@@ -2,12 +2,13 @@
 import pytest
 
 from kroger_reorder.stores import (DEFAULT_STORE, PROVIDERS, UnknownStore, item_key, provider, search_link,
-                                   store_names)
+                                   shop_link, store_names)
 
 
 def test_kroger_is_the_default_and_the_only_catalog_store():
     assert DEFAULT_STORE == "kroger"
-    assert [k for k, p in PROVIDERS.items() if p.has_catalog] == ["kroger"]
+    assert [k for k, p in PROVIDERS.items() if p.cart] == ["kroger"]
+    assert [k for k, p in PROVIDERS.items() if p.catalog] == ["kroger", "aldi"]
     assert list(PROVIDERS) == ["kroger", "aldi", "meijer", "walmart"]
 
 
@@ -23,6 +24,12 @@ def test_search_link_encodes_the_term():
     assert search_link("walmart", "2% milk & eggs") == "https://www.walmart.com/search?q=2%25%20milk%20%26%20eggs"
     assert search_link("aldi", "eggs") == "https://www.aldi.us/store/aldi/s?k=eggs"
     assert search_link("meijer", "eggs") == "https://www.meijer.com/shopping/search.html?text=eggs"
+
+
+def test_shop_link_uses_the_product_page_for_catalog_products():
+    assert shop_link("aldi", "16902710", "Whole Milk") == "https://www.aldi.us/store/aldi/products/16902710"
+    assert shop_link("aldi", "whole-milk", "Whole Milk") == "https://www.aldi.us/store/aldi/s?k=Whole%20Milk"
+    assert shop_link("meijer", "123", "Eggs") == "https://www.meijer.com/shopping/search.html?text=Eggs"
 
 
 def test_search_link_refuses_a_catalog_store():

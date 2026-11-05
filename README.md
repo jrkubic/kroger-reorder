@@ -219,6 +219,7 @@ All settings live in `.env` (or the process environment, which wins). Only the f
 | `ANTHROPIC_API_KEY` | unset | Photo and recipe suggestions through the Anthropic API. Unset means Claude Code. |
 | `PHOTO_MODEL` | `claude-opus-5-5` | Model used for photo and recipe suggestions by either backend. |
 | `PHOTO_TIMEOUT` | `90` | Seconds to wait for a photo analysis or recipe suggestion. |
+| `ALDI_SEARCH_HASH`, `ALDI_ITEMS_HASH`, `ALDI_LOCATION_HASH` | built in | Replacement request hashes for aldi.us after Instacart changes its site. Leave unset unless Aldi search says the site changed; see [Troubleshooting](#troubleshooting). |
 
 The server prints the data folder and the active Claude backend (the "Claude:" line) when it starts, so you can confirm what it picked up.
 
@@ -384,7 +385,8 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 | `POST` | `/api/lists/{slug}/duplicate` | Copy under a new name |
 | `DELETE` | `/api/lists/{slug}` | Delete (refused for the last list) |
 | `PUT` | `/api/active` | Set the active list |
-| `GET` | `/api/search?term=` | Search the store catalog |
+| `GET` | `/api/search?term=&store=` | Search a store's catalog: `kroger` (default, needs a chosen store) or `aldi` |
+| `GET` | `/api/aldi/store` | The Aldi store aldi.us picked for this connection (name, address) |
 | `POST` | `/api/lists/{slug}/items` | Add one product (a plain `name` on an Aldi, Meijer or Walmart list) |
 | `PUT` | `/api/lists/{slug}/items` | Replace all items (quantities, checks) |
 | `DELETE` | `/api/lists/{slug}/items/{upc}` | Remove one item |
@@ -398,7 +400,7 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api/import/parse` | Text to lines (`name`, `quantity`, optional `exact`) |
-| `POST` | `/api/import/resolve` | Catalog candidates for each name |
+| `POST` | `/api/import/resolve` | Catalog candidates for each name, from the `store` given (`kroger` default, or `aldi`) |
 | `POST` | `/api/lists/{slug}/import` | Add the chosen picks to a list (names alone on an Aldi, Meijer or Walmart list) |
 
 ### Photo and recipe suggestions, usage
