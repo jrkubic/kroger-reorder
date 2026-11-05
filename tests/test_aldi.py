@@ -1,0 +1,186 @@
+# tests/test_aldi.py
+"""AldiClient against trimmed real aldi.us responses (tests/fixtures/aldi_*), served by httpx.MockTransport."""
+import copy
+import json
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
+
+import httpx
+import pytest
+
+from kroger_reorder.aldi import (CHANGED, ITEMS_HASH, SEARCH_HASH, AldiClient, AldiError, Context)
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+PAGE = (FIXTURES / "aldi_page.html").read_text(encoding="utf-8")
+SEARCH = json.loads((FIXTURES / "aldi_search.json").read_text(encoding="utf-8"))
+ITEMS = json.loads((FIXTURES / "aldi_items.json").read_text(encoding="utf-8"))
+LOCATION = json.loads((FIXTURES / "aldi_location.json").read_text(encoding="utf-8"))
+
+
+class FakeSite:
+    """Routes requests the way aldi.us does; records them; lets a test override any answer."""
+
+    def __init__(self):
+        self.calls = []          # (operationName or "page", query dict)
+        self.items = copy.deepcopy(ITEMS)
+        self.search = copy.deepcopy(SEARCH)
+        self.overrides = {}      # operationName or "page" -> list of httpx.Response or Exception, consumed in order
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        url = urlsplit(str(request.url))
+        query = {k: v[0] for k, v in parse_qs(url.query).items()}
+        op = "page" if url.path == "/store/aldi/s" else query.get("operationName", "?")
+        self.calls.append((op, query))
+        queued = self.overrides.get(op)
+        if queued:
+            answer = queued.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+        if op == "page":
+            return httpx.Response(200, text=PAGE, headers={"set-cookie": "session=abc; Path=/"})
+        if op == "SearchResultsPlacements":
+            return httpx.Response(200, json=self.search)
+        if op == "Items":
+            wanted = json.loads(query["variables"])["ids"]
+            by_id = {i["id"]: i for i in self.items["data"]["items"]}
+            return httpx.Response(200, json={"data": {"items": [by_id[i] for i in wanted if i in by_id]}})
+        if op == "GetRetailerLocationAddress":
+            return httpx.Response(200, json=LOCATION)
+        return httpx.Response(404, json={})
+
+    def ops(self):
+        return [op for op, _ in self.calls]
+
+
+@pytest.fixture
+def site():
+    return FakeSite()
+
+
+@pytest.fixture
+def client(site):
+    return AldiClient(transport=httpx.MockTransport(site.handler))
+
+
+def test_session_parses_context_from_page_once(client, site):
+    client.search_products("bananas")
+    client.search_products("strawberries")
+    assert client.context == Context(postal_code="43040", shop_id="48408", zone_id="787", location_id="24032")
+    assert site.ops().count("page") == 1
+
+
+def test_search_returns_ranked_grid_products_with_prices(client, site):
+    results = client.search_products("bananas")
+    # Grid placements in order; the fixture's Items answer covers three of them, the rest are skipped.
+    assert [r["upc"] for r in results] == ["25720157", "16383764", "3111634"]
+    first = results[0]
+    assert first == {
+        "upc": "25720157", "name": "Bananas, per lb", "brand": "", "size": "per lb",
+        "price": 0.16, "promo": None, "in_stock": True,
+        "image": first["image"], "url": "https://www.aldi.us/store/aldi/products/25720157",
+    }
+    assert first["image"].startswith("https://www.instacart.com/image-server/296x296/")
+    search_vars = json.loads(dict(site.calls)["SearchResultsPlacements"]["variables"])
+    assert search_vars["query"] == "bananas"
+    assert (search_vars["shopId"], search_vars["postalCode"], search_vars["zoneId"]) == ("48408", "43040", "787")
+    items_vars = json.loads(dict(site.calls)["Items"]["variables"])
+    assert items_vars["ids"][:3] == ["items_24032-25720157", "items_24032-3255474", "items_24032-23974682"]
+    assert len(items_vars["ids"]) == 10   # limit
+    assert json.loads(dict(site.calls)["Items"]["extensions"])["persistedQuery"]["sha256Hash"] == ITEMS_HASH
+
+
+def test_search_ignores_carousels_and_honours_limit(client, site):
+    results = client.search_products("bananas", limit=1)
+    assert [r["upc"] for r in results] == ["25720157"]
+    assert json.loads(dict(site.calls)["Items"]["variables"])["ids"] == ["items_24032-25720157"]
+
+
+def test_search_with_no_grid_results_is_empty_and_skips_items(client, site):
+    site.search["data"]["searchResultsPlacements"]["placements"] = []
+    assert client.search_products("zzz") == []
+    assert "Items" not in site.ops()
+
+
+def test_sale_price_maps_to_promo(client, site):
+    section = site.items["data"]["items"][1]["price"]["viewSection"]
+    section.update(fullPriceString="$3.99", priceString="$2.99")
+    straw = next(r for r in client.search_products("x") if r["upc"] == "16383764")
+    assert (straw["price"], straw["promo"]) == (3.99, 2.99)
+
+
+def test_out_of_stock_and_brand(client, site):
+    item = site.items["data"]["items"][2]
+    item["availability"] = {"available": False, "stockLevel": "outOfStock"}
+    item["brandName"] = "Simply Nature"
+    avocado = next(r for r in client.search_products("x") if r["upc"] == "3111634")
+    assert avocado["in_stock"] is False and avocado["brand"] == "Simply Nature"
+
+
+def test_lookup_products_batches_ids_and_skips_missing(client, site):
+    found = client.lookup_products(["25720157", "3111634", "999"])
+    assert sorted(found) == ["25720157", "3111634"]
+    assert found["3111634"]["name"] == "Large Avocados, each"
+    assert site.ops().count("Items") == 1
+    assert json.loads(dict(site.calls)["Items"]["variables"])["ids"] == [
+        "items_24032-25720157", "items_24032-3111634", "items_24032-999"]
+    assert client.lookup_products([]) == {}
+
+
+def test_store_names_the_location(client):
+    assert client.store() == {"store_id": "24032", "store_name": "ALDI - SPR 20 - Marysville",
+                              "address": "15740 US-36 E, Marysville, OH 43040"}
+
+
+def test_transport_failure(client, site):
+    site.overrides["page"] = [httpx.ConnectError("boom")]
+    with pytest.raises(AldiError) as exc:
+        client.search_products("milk")
+    assert exc.value.status == 0 and exc.value.message == "Couldn't reach aldi.us: ConnectError"
+
+
+def test_http_error(client, site):
+    site.overrides["SearchResultsPlacements"] = [httpx.Response(500, text="oops")]
+    with pytest.raises(AldiError) as exc:
+        client.search_products("milk")
+    assert (exc.value.status, exc.value.message) == (502, "Aldi's site said HTTP 500.")
+
+
+@pytest.mark.parametrize("body", [
+    {"errors": [{"message": "PersistedQueryNotFound"}], "data": None},
+    {"data": {"somethingElse": {}}},
+    "not json",
+])
+def test_changed_site(client, site, body):
+    answer = httpx.Response(200, text=body) if isinstance(body, str) else httpx.Response(200, json=body)
+    site.overrides["SearchResultsPlacements"] = [answer]
+    with pytest.raises(AldiError) as exc:
+        client.search_products("milk")
+    assert (exc.value.status, exc.value.message) == (502, CHANGED)
+
+
+def test_page_without_context_is_a_changed_site(client, site):
+    site.overrides["page"] = [httpx.Response(200, text="<html>nothing here</html>")]
+    with pytest.raises(AldiError) as exc:
+        client.search_products("milk")
+    assert exc.value.message == CHANGED
+
+
+def test_forbidden_refreshes_the_session_once(client, site):
+    client.search_products("milk")
+    site.overrides["SearchResultsPlacements"] = [httpx.Response(403, text="no")]
+    assert client.search_products("milk")                 # retried with a fresh session
+    assert site.ops().count("page") == 2
+    site.overrides["SearchResultsPlacements"] = [httpx.Response(403), httpx.Response(403)]
+    with pytest.raises(AldiError) as exc:
+        client.search_products("milk")
+    assert exc.value.message == "Aldi's site said HTTP 403."
+
+
+def test_hash_overrides(site):
+    client = AldiClient(transport=httpx.MockTransport(site.handler), search_hash="a" * 64, items_hash="b" * 64)
+    client.search_products("milk")
+    calls = dict(site.calls)
+    assert json.loads(calls["SearchResultsPlacements"]["extensions"])["persistedQuery"]["sha256Hash"] == "a" * 64
+    assert json.loads(calls["Items"]["extensions"])["persistedQuery"]["sha256Hash"] == "b" * 64
+    assert SEARCH_HASH != "a" * 64

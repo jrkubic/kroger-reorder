@@ -105,6 +105,7 @@ kroger-reorder/
 │   ├── __main__.py        Entry point: python -m kroger_reorder [--no-browser] [--launcher]
 │   ├── main.py            FastAPI app factory and every HTTP route
 │   ├── kroger.py          Kroger API client: OAuth, locations, products, cart
+│   ├── aldi.py            Aldi US catalog client: search, product lookups, store (reads aldi.us)
 │   ├── storage.py         JSON persistence: lists, config, tokens, order history
 │   ├── stores.py          The stores a list can belong to: Kroger (catalog, cart) and hand-off stores
 │   ├── orders.py          Builds an order snapshot after a successful send
