@@ -2,7 +2,7 @@
 import pytest
 
 from kroger_reorder.stores import (DEFAULT_STORE, PROVIDERS, UnknownStore, item_key, provider, search_link,
-                                   shop_link, store_names)
+                                   is_product, shop_link, store_names)
 
 
 def test_kroger_is_the_default_and_the_only_catalog_store():
@@ -26,8 +26,17 @@ def test_search_link_encodes_the_term():
     assert search_link("meijer", "eggs") == "https://www.meijer.com/shopping/search.html?text=eggs"
 
 
+def test_is_product_is_scoped_to_the_store():
+    assert is_product("kroger", "0001111041700") and not is_product("kroger", "aldi:16902710")
+    assert is_product("aldi", "aldi:16902710")
+    assert not is_product("aldi", "16902710")        # a Kroger UPC, or a plain item named "16902710"
+    assert not is_product("aldi", "whole-milk") and not is_product("aldi", "aldi:")
+    assert not is_product("meijer", "123")
+
+
 def test_shop_link_uses_the_product_page_for_catalog_products():
-    assert shop_link("aldi", "16902710", "Whole Milk") == "https://www.aldi.us/store/aldi/products/16902710"
+    assert shop_link("aldi", "aldi:16902710", "Whole Milk") == "https://www.aldi.us/store/aldi/products/16902710"
+    assert shop_link("aldi", "16902710", "Whole Milk") == "https://www.aldi.us/store/aldi/s?k=Whole%20Milk"
     assert shop_link("aldi", "whole-milk", "Whole Milk") == "https://www.aldi.us/store/aldi/s?k=Whole%20Milk"
     assert shop_link("meijer", "123", "Eggs") == "https://www.meijer.com/shopping/search.html?text=Eggs"
 

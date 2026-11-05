@@ -313,7 +313,7 @@ def test_handoff_lists_checked_items_with_search_links_and_text(client, aldi):
 
 def aldi_product(upc, name, **over):
     base = {"upc": upc, "name": name, "brand": "Friendly Farms", "size": "1 gal", "price": 2.57, "promo": None,
-            "in_stock": True, "image": f"https://img/{upc}.jpg", "url": f"https://www.aldi.us/store/aldi/products/{upc}"}
+            "in_stock": True, "image": f"https://img/{upc}.jpg", "url": f"https://www.aldi.us/store/aldi/products/{upc[5:]}"}
     base.update(over)
     return base
 
@@ -322,16 +322,16 @@ class FakeAldi:
     def __init__(self):
         self.error: Exception | None = None
         self.searches, self.lookups = [], []
-        self.catalog = {"16902710": aldi_product("16902710", "Whole Milk"),
-                        "20957684": aldi_product("20957684", "2% Milk", price=2.85, promo=2.49)}
+        self.catalog = {"aldi:16902710": aldi_product("aldi:16902710", "Whole Milk"),
+                        "aldi:20957684": aldi_product("aldi:20957684", "2% Milk", price=2.85, promo=2.49)}
 
     def _check(self):
         if self.error:
             raise self.error
 
     def search_products(self, term, limit=10):
-        self._check()
         self.searches.append(term)
+        self._check()
         return [dict(p, name=f"{p['name']} for {term}") for p in self.catalog.values()][:limit]
 
     def lookup_products(self, ids):
@@ -367,7 +367,7 @@ def test_state_reports_aldi_catalog_when_configured(aldi_client):
 def test_search_by_store_needs_no_kroger_store(aldi_client, fake_aldi):
     r = aldi_client.get("/api/search", params={"term": "milk", "store": "aldi"})
     assert r.status_code == 200
-    assert [p["upc"] for p in r.json()["results"]] == ["16902710", "20957684"]
+    assert [p["upc"] for p in r.json()["results"]] == ["aldi:16902710", "aldi:20957684"]
     assert fake_aldi.searches == ["milk"]
     assert aldi_client.get("/api/search", params={"term": "milk"}).json()["error"] == "Pick a store first."
     r = aldi_client.get("/api/search", params={"term": "milk", "store": "meijer"})
@@ -396,36 +396,41 @@ def test_resolve_against_aldi(aldi_client):
     r = aldi_client.post("/api/import/resolve", json={"names": ["milk"], "store": "aldi"})
     assert r.status_code == 200
     (match,) = r.json()["matches"]
-    assert match["name"] == "milk" and [c["upc"] for c in match["candidates"]] == ["16902710", "20957684"]
+    assert match["name"] == "milk" and [c["upc"] for c in match["candidates"]] == ["aldi:16902710", "aldi:20957684"]
 
 
 def test_aldi_list_takes_products_and_plain_items(aldi_client, aldi_list):
-    milk = aldi_product("16902710", "Whole Milk")
+    milk = aldi_product("aldi:16902710", "Whole Milk")
     r = aldi_client.post(f"/api/lists/{aldi_list}/items", json={k: milk[k] for k in ("upc", "name", "size", "image", "price", "promo")})
     r = aldi_client.post(f"/api/lists/{aldi_list}/items", json={"name": "Birthday candles"})
+    r = aldi_client.post(f"/api/lists/{aldi_list}/items", json={"upc": "aldi:16902710", "name": "Whole Milk"})  # again: one more
+    r = aldi_client.post(f"/api/lists/{aldi_list}/items", json={"upc": "0001111041700", "name": "Kroger Milk"})  # not Aldi's: plain
     items = r.json()["items"]
-    assert [(i["upc"], i["name"], i["size"], i["price"]) for i in items] == [
-        ("16902710", "Whole Milk", "1 gal", 2.57), ("birthday-candles", "Birthday candles", "", None)]
+    assert [(i["upc"], i["name"], i["size"], i["price"], i["quantity"]) for i in items] == [
+        ("aldi:16902710", "Whole Milk", "1 gal", 2.57, 2), ("birthday-candles", "Birthday candles", "", None, 1),
+        ("kroger-milk", "Kroger Milk", "", None, 1)]
     assert items[0]["price_checked_at"]
 
 
 def test_import_into_aldi_keeps_catalog_products_and_plain_rows(aldi_client, aldi_list):
-    picks = [{"upc": "16902710", "name": "Whole Milk", "size": "1 gal", "price": 2.57, "image": "https://img/m.jpg", "quantity": 2},
+    picks = [{"upc": "aldi:16902710", "name": "Whole Milk", "size": "1 gal", "price": 2.57, "image": "https://img/m.jpg", "quantity": 2},
              {"upc": "", "name": "Birthday candles"},
-             {"upc": "16902710", "name": "Whole Milk", "quantity": 1}]
+             {"upc": "aldi:16902710", "name": "Whole Milk", "quantity": 1},
+             {"upc": "0001111041700", "name": "Kroger Milk", "size": "1 gal", "price": 3.49}]   # a Kroger UPC: plain here
     items = aldi_client.post(f"/api/lists/{aldi_list}/import", json=picks).json()["items"]
-    assert [(i["upc"], i["quantity"], i["size"], i["image"]) for i in items] == [
-        ("16902710", 3, "1 gal", "https://img/m.jpg"), ("birthday-candles", 1, "", None)]
+    assert [(i["upc"], i["quantity"], i["size"], i["image"], i["price"]) for i in items] == [
+        ("aldi:16902710", 3, "1 gal", "https://img/m.jpg", 2.57), ("birthday-candles", 1, "", None, None),
+        ("kroger-milk", 1, "", None, None)]
 
 
 def test_aldi_prices_batch_lookup_and_leave_plain_items(aldi_client, aldi_list, fake_aldi):
     aldi_client.put(f"/api/lists/{aldi_list}/items", json=[
-        {"upc": "20957684", "name": "2% Milk", "price": 3.10},
-        {"upc": "99999", "name": "Gone"},
+        {"upc": "aldi:20957684", "name": "2% Milk", "price": 3.10},
+        {"upc": "aldi:99999", "name": "Gone"},
         {"upc": "candles", "name": "Candles"}])
     r = aldi_client.post(f"/api/lists/{aldi_list}/prices")
     assert r.status_code == 200 and r.json()["failed"] == 1
-    assert fake_aldi.lookups == [["20957684", "99999"]]
+    assert fake_aldi.lookups == [["aldi:20957684", "aldi:99999"]]
     milk, gone, candles = r.json()["items"]
     assert (milk["price"], milk["promo"]) == (2.85, 2.49) and milk["price_checked_at"]
     assert gone["price"] is None and candles["price_checked_at"] is None
@@ -434,10 +439,25 @@ def test_aldi_prices_batch_lookup_and_leave_plain_items(aldi_client, aldi_list, 
     assert r.status_code == 502 and r.json()["error"] == "Couldn't check prices: Couldn't reach aldi.us: ConnectError"
 
 
+def test_aldi_price_refresh_keeps_a_price_it_cannot_read(aldi_client, aldi_list, fake_aldi):
+    aldi_client.put(f"/api/lists/{aldi_list}/items", json=[{"upc": "aldi:16902710", "name": "Whole Milk", "price": 2.57}])
+    fake_aldi.catalog["aldi:16902710"].update(price=None, promo=None)
+    item = aldi_client.post(f"/api/lists/{aldi_list}/prices").json()["items"][0]
+    assert item["price"] == 2.57 and item["price_checked_at"] is None
+
+
+def test_aldi_resolve_stops_early_once_the_site_is_down(aldi_client, fake_aldi):
+    fake_aldi.error = AldiError(0, "Couldn't reach aldi.us: ConnectError")
+    r = aldi_client.post("/api/import/resolve", json={"names": [f"item {n}" for n in range(12)], "store": "aldi"})
+    assert r.status_code == 502
+    assert r.json()["error"] == "Couldn't look up any items: Couldn't reach aldi.us: ConnectError"
+    assert len(fake_aldi.searches) <= 4   # at most one wave of the thread pool; the rest skip
+
+
 def test_aldi_list_has_no_cart_and_hands_off_with_product_pages(aldi_client, aldi_list, kroger):
     kroger.signed_in = True
     aldi_client.put(f"/api/lists/{aldi_list}/items", json=[
-        {"upc": "16902710", "name": "Whole Milk"}, {"upc": "candles", "name": "Candles"}])
+        {"upc": "aldi:16902710", "name": "Whole Milk"}, {"upc": "candles", "name": "Candles"}])
     r = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[])
     assert r.status_code == 400 and r.json()["error"] == "This list is for Aldi; use Open at Aldi instead."
     urls = [i["url"] for i in aldi_client.get(f"/api/lists/{aldi_list}/handoff").json()["items"]]

@@ -293,7 +293,7 @@ Click **+**, name the list and pick the store. None of these stores has a public
 
 **Aldi lists** search Aldi's catalog:
 
-- The **Add an item** box searches aldi.us and shows products with photo, size and price for the Aldi store nearest the computer running the app (the line under the list names it, for example "ALDI - SPR 20 - Marysville, prices from aldi.us"). The last result is always **Add “…” as typed**, for things Aldi doesn't sell or you don't want matched.
+- The **Add an item** box searches aldi.us and shows products with photo, size and price for the Aldi store nearest the computer running the app (the line under the list names it, for example "Shopping at ALDI - SPR 20 - Marysville, prices from aldi.us"). The last result is always **Add “…” as typed**, for things Aldi doesn't sell or you don't want matched.
 - **Import**, **Photo** and **Recipe** match every line against Aldi, three candidates per row plus **Add “…” as typed**, and **Search for a different item…** re-searches a row. Lookups run four at a time, so a 30-line review takes several seconds.
 - **Check prices** and the daily background refresh update matched products in one request. Sale prices show in green with the regular price struck through, as on Kroger lists.
 - If aldi.us can't be read, the list keeps working as a plain list: search offers only **Add “…” as typed** and the review table offers each line by name, with the reason shown.
@@ -359,7 +359,7 @@ Click **Export CSV** to download the current list as `<list>.csv` with these col
 upc,name,size,quantity,included,price,promo,image
 ```
 
-Open it in a spreadsheet, keep it as a backup, or share it. Importing that file into any Kroger list recreates the items exactly, including unchecked ones. Prices in the file are the last ones seen and refresh in the background after import. On an Aldi, Meijer or Walmart list the `upc` column holds Aldi's product id for a matched Aldi product, or a key made from the item's name otherwise. Import such a file into an Aldi, Meijer or Walmart list, where every line is matched by name again; imported into a Kroger list, Aldi's numeric ids would be taken for Kroger UPCs.
+Open it in a spreadsheet, keep it as a backup, or share it. Importing that file into any Kroger list recreates the items exactly, including unchecked ones. Prices in the file are the last ones seen and refresh in the background after import. On an Aldi, Meijer or Walmart list the `upc` column holds `aldi:` plus Aldi's product id for a matched Aldi product, or a key made from the item's name otherwise. Importing such a file anywhere matches its lines by name again, at whichever store the target list belongs to.
 
 ## Data and privacy
 
@@ -553,7 +553,7 @@ Aldi's catalog has no public API either. The app reads it the way the aldi.us se
 | `Aldi's site said HTTP ...` | aldi.us refused the request. Try again in a few minutes; if it persists the site may be blocking automated reads, and Aldi lists keep working by name. |
 | `Couldn't look up any items: ...` | Every line of an import failed to match at the store; the message after the colon says why. On an Aldi list the review falls back to plain names. |
 | `Couldn't check prices: ...` | A price check failed for every item; the message after the colon says why. |
-| `Meijer lists have no catalog; add items by name.` (or Walmart) | A catalog search was requested for a store without one. Reload the page. |
+| `Meijer lists have no catalog; add items by name.` (or Walmart, or Aldi) | A catalog search was requested for a store without one, or for Aldi when the app runs without its Aldi client. Reload the page; start the app with `python -m kroger_reorder`. |
 | `Aldi isn't configured.` | The app was started without its Aldi client (only in tests or custom setups). Start it with `python -m kroger_reorder`. |
 | `Kroger lists are sent to the cart instead.` | **Open at &lt;store&gt;** was requested for a Kroger list. Use **Send to cart**. |
 | `Copy is not available here; select the text below and copy it.` | Browsers only allow one-click copy on `https://` or `localhost`. On a phone over plain http, the panel shows the text to select and copy by hand. |

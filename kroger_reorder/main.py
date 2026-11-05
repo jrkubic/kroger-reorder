@@ -27,7 +27,8 @@ from .orders import build_order
 from .recipe import extract as extract_recipe, fetch_page, suggest as suggest_recipe
 from .settings import DEFAULT_PHOTO_MODEL
 from .storage import DEFAULT_STORE, Item, ListLoad, Storage
-from .stores import DEFAULT_STORE as KROGER, PROVIDERS, Provider, UnknownStore, item_key, provider, shop_link
+from .stores import (DEFAULT_STORE as KROGER, PROVIDERS, Provider, UnknownStore, is_product, item_key, provider,
+                     shop_link)
 from .usage import profile_text, usage_profile
 from .vision import VisionError, analyze as analyze_photos
 
@@ -211,11 +212,11 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         """A catalog store whose client is available. Aldi without a client behaves as a plain store."""
         return p.catalog and (p.key == KROGER or aldi is not None)
 
-    def catalog_search(p: Provider, term: str) -> list[dict]:
+    def catalog_search(p: Provider, term: str, limit: int = 10) -> list[dict]:
         """Raises KrogerError / AldiError; the caller has checked has_catalog and, for Kroger, the store."""
         if p.key == KROGER:
-            return kroger.search_products(term, store_id())
-        return aldi.search_products(term)
+            return kroger.search_products(term, store_id())[:limit]
+        return aldi.search_products(term, limit=limit)
 
     def no_catalog(p: Provider) -> JSONResponse:
         return error(400, f"{p.name} lists have no catalog; add items by name.")
@@ -386,7 +387,7 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
     def add_item(slug: str, new: NewItem):
         loaded = get_list(slug)
         p = provider_of(loaded)
-        if not p.cart and not (new.upc and has_catalog(p)):  # a plain item: only lists without a cart take them
+        if not p.cart and not (has_catalog(p) and is_product(p.key, new.upc)):  # a plain item: only lists without a cart
             name = clean_name(new.name)
             if not name:
                 return error(400, NO_NAME)
@@ -400,7 +401,11 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
             return list_payload(get_list(slug))
         if not new.upc:
             return error(400, NO_UPC)
-        if not any(i.upc == new.upc for i in loaded.items):
+        existing = next((i for i in loaded.items if i.upc == new.upc), None)
+        if existing and not p.cart:
+            existing.quantity += 1  # as for a plain item: picking it again means one more
+            storage.save_list(slug, loaded.name, loaded.items)
+        elif not existing:
             # A price that came along with the add was fetched just now, so stamp it like a refresh would.
             checked = utc_now() if new.price is not None or new.promo is not None else None
             loaded.items.append(Item(**new.model_dump() | {"size": new.size or ""}, price_checked_at=checked))
@@ -465,7 +470,7 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
 
     def refresh_catalog_prices(slug: str, loaded: ListLoad):
         """Aldi: one batched lookup for every catalog product on the list; plain items are left alone."""
-        wanted = [i.upc for i in loaded.items if i.upc.isdigit()]
+        wanted = [i.upc for i in loaded.items if is_product(loaded.store, i.upc)]
         if not wanted:
             return list_payload(loaded, failed=0)
         try:
@@ -476,8 +481,10 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         current = get_list(slug)  # merge into the list as it is now, as the Kroger path does
         for item in current.items:
             fresh = fresh_by_upc.get(item.upc)
-            if fresh:
+            # A price the site shows in a form we can't read ("2 for $5") keeps the last known one.
+            if fresh and (fresh.get("price") is not None or fresh.get("promo") is not None):
                 item.price, item.promo, item.price_checked_at = fresh.get("price"), fresh.get("promo"), now
+            if fresh:
                 item.image = fresh.get("image") or item.image
         storage.save_list(slug, current.name, current.items)
         return list_payload(get_list(slug), failed=len(set(wanted)) - len(set(wanted) & set(fresh_by_upc)))
@@ -619,10 +626,18 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
             return no_catalog(p)
         if p.key == KROGER and not store_id():
             return error(400, "Pick a store first.")
+        down: list[AldiError] = []   # once aldi.us is unreachable or changed, the other lookups won't fare better
+
         def lookup(name: str):
+            if down:
+                return [], down[0]
             try:
-                return catalog_search(p, name)[:RESOLVE_CANDIDATES], None
-            except (KrogerError, AldiError) as exc:
+                return catalog_search(p, name, RESOLVE_CANDIDATES), None
+            except AldiError as exc:
+                if exc.unavailable:
+                    down.append(exc)
+                return [], exc
+            except KrogerError as exc:
                 return [], exc
 
         if p.key == KROGER:   # sequential, as always: Kroger's API is rate limited per app
@@ -654,7 +669,7 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
                 name = clean_name(pick.name)
                 if not name:
                     continue
-                product = catalog and pick.upc.isdigit()
+                product = catalog and is_product(p.key, pick.upc)
                 key = pick.upc if product else item_key(name)
                 if key in by_upc:
                     by_upc[key].quantity += max(1, pick.quantity)

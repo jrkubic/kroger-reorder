@@ -21,12 +21,14 @@ class Provider:
     search_url: str | None = None   # "{term}" is replaced by the URL-encoded search term
     home_url: str | None = None
     product_url: str | None = None  # "{id}" is replaced by a catalog product id, for Open at <store>
+    product_prefix: str = ""        # catalog ids are stored as prefix + digits; Kroger UPCs are bare digits
 
 
 PROVIDERS: dict[str, Provider] = {p.key: p for p in (
     Provider("kroger", "Kroger", catalog=True, cart=True),
     Provider("aldi", "Aldi", catalog=True, cart=False, search_url="https://www.aldi.us/store/aldi/s?k={term}",
-             home_url="https://www.aldi.us/", product_url="https://www.aldi.us/store/aldi/products/{id}"),
+             home_url="https://www.aldi.us/", product_url="https://www.aldi.us/store/aldi/products/{id}",
+             product_prefix="aldi:"),
     Provider("meijer", "Meijer", catalog=False, cart=False,
              search_url="https://www.meijer.com/shopping/search.html?text={term}", home_url="https://www.meijer.com/"),
     Provider("walmart", "Walmart", catalog=False, cart=False,
@@ -35,7 +37,7 @@ PROVIDERS: dict[str, Provider] = {p.key: p for p in (
 assert DEFAULT_STORE in PROVIDERS and PROVIDERS[DEFAULT_STORE].cart
 
 __all__ = ["DEFAULT_STORE", "PROVIDERS", "Provider", "UnknownStore", "item_key", "provider", "search_link",
-           "shop_link", "store_names"]
+           "is_product", "shop_link", "store_names"]
 
 
 def store_names() -> str:
@@ -65,11 +67,21 @@ def search_link(key: str, term: str) -> str:
     return p.search_url.format(term=quote(term, safe=""))
 
 
+def is_product(key: str, upc: str) -> bool:
+    """Is `upc` a product from this store's catalog (rather than a plain item's name key, or another
+    store's id)? Kroger: all digits. Aldi: "aldi:" + digits. Name keys never contain ":"."""
+    p = provider(key)
+    if not p.catalog:
+        return False
+    rest = upc[len(p.product_prefix):] if upc.startswith(p.product_prefix) else ""
+    return rest.isdigit()
+
+
 def shop_link(key: str, upc: str, name: str) -> str:
     """Where Open at <store> sends an item: its product page when it is a catalog product, else a search."""
     p = provider(key)
-    if p.product_url and upc.isdigit():
-        return p.product_url.format(id=upc)
+    if p.product_url and is_product(key, upc):
+        return p.product_url.format(id=upc[len(p.product_prefix):])
     return search_link(key, name)
 
 

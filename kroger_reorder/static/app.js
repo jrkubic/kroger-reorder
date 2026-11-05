@@ -63,7 +63,9 @@ function providerOf(key) {
 function isHandOff() { return !!state.active_list && !providerOf(state.store_key).cart; }
 function hasCatalog() { return !!state.active_list && providerOf(state.store_key).catalog; }
 function isKroger() { return state.store_key === 'kroger'; }
-function canPrice() { return hasCatalog() && state.items.length > 0 && (!isKroger() || !!state.store); }
+// A product from the active list's catalog: Kroger UPCs are digits, Aldi's are "aldi:" + digits.
+function isProduct(upc) { return isKroger() ? /^\d+$/.test(upc) : /^aldi:\d+$/.test(upc); }
+function canPrice() { return hasCatalog() && state.items.some(i => isProduct(i.upc)) && (!isKroger() || !!state.store); }
 
 // The "Add <name> as typed" choice a catalog without a cart offers next to its matches.
 function asTyped(name) { return { upc: '', name, asTyped: true }; }
@@ -73,10 +75,13 @@ async function resolveNames(names) {
   return matches;
 }
 
+let aldiStoreLoading = false;
 async function loadAldiStore() {
-  if (state.aldi_store) return;
+  if (aldiStoreLoading || (state.aldi_store && !state.aldi_store.error)) return;
+  aldiStoreLoading = true;
   try { state.aldi_store = (await api('GET', '/api/aldi/store')).store; }
-  catch (e) { state.aldi_store = { error: e.message }; }
+  catch (e) { state.aldi_store = { error: e.message }; }   // retried on the next list switch
+  finally { aldiStoreLoading = false; }
   render();
 }
 
@@ -128,8 +133,8 @@ function render() {
   $('search').textContent = catalog ? 'Search' : 'Add';
   const aldiStore = state.aldi_store;
   $('store-label').textContent = isKroger() ? (state.store ? state.store.store_name : '')
-    : !aldiStore ? `${store.name} prices from aldi.us`
-    : aldiStore.error ? `${store.name}: ${aldiStore.error}` : `${aldiStore.store_name}, prices from aldi.us`;
+    : !aldiStore ? `Shopping at ${store.name}, prices from aldi.us`
+    : aldiStore.error ? `${store.name}: ${aldiStore.error}` : `Shopping at ${aldiStore.store_name}, prices from aldi.us`;
   $('change-store').classList.toggle('hidden', !isKroger());
   $('store-line').classList.toggle('hidden', !catalog);
   $('price-row').classList.toggle('hidden', !catalog);
@@ -243,6 +248,7 @@ async function switchList(slug) {
   state.active_list = slug;
   banner();
   $('search-results').innerHTML = '';  // results from one store's catalog mean nothing on another list
+  if (state.aldi_store?.error) state.aldi_store = null;  // try the Aldi store again
   await loadList();
   render();
   if (pricesStale()) refreshPrices(false);
@@ -457,6 +463,7 @@ $('handoff-copy').onclick = async () => {
 
 function openImport() {
   importRows = [];
+  importPlain = false;
   $('import-text').value = '';
   $('import-file').value = '';
   $('import-review').classList.add('hidden');
@@ -619,7 +626,8 @@ async function runRowSearch(idx) {
     row.searched = true;  // the user chose this match on purpose, so it starts on add whatever the kind
     $('import-table').querySelector(`[data-import-row="${idx}"]`).replaceWith(renderRow(idx));
     const found = row.candidates.some(c => !c.asTyped);
-    banner(found ? null : 'warn', found ? '' : `No match for “${term}” at your store.`, false, $('import-banner'));
+    const where = isKroger() ? 'your store' : providerOf(state.store_key).name;
+    banner(found ? null : 'warn', found ? '' : `No match for “${term}” at ${where}.`, false, $('import-banner'));
     updateImportSummary();
   } catch (e) {
     input.disabled = button.disabled = false;
