@@ -1,0 +1,14 @@
+{
+ "data": {
+  "retailerLocation": {
+   "id": "24032",
+   "viewSection": {
+    "address": {
+     "lineOneString": "15740 US-36 E",
+     "lineTwoString": "Marysville, OH 43040"
+    },
+    "locationDisplayNameString": "ALDI - SPR 20 - Marysville"
+   }
+  }
+ }
+}

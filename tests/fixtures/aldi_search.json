@@ -1,0 +1,258 @@
+{
+ "data": {
+  "searchResultsPlacements": {
+   "searchId": "test",
+   "placements": [
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "__typename": "ContentManagementCardListsSlot"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "__typename": "ContentManagementCardListsSlot"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "__typename": "SearchContentManagementSearchItemGridHeader"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-25720157"
+      ],
+      "__typename": "SearchContentManagementSearchItemGrid"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "productIds": [
+       "25720157",
+       "3255474",
+       "23974682",
+       "16383764",
+       "3111634",
+       "305371",
+       "19242784",
+       "16507392",
+       "17327097",
+       "17770879",
+       "17327025",
+       "1456622",
+       "16553260",
+       "17819978",
+       "455048",
+       "16346087",
+       "365208",
+       "26274154",
+       "16558450",
+       "17330344"
+      ],
+      "__typename": "SearchContentManagementSearchFrequentlyBoughtWithCarousel"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-3255474"
+      ],
+      "__typename": "SearchContentManagementSearchItemGrid"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-23974682"
+      ],
+      "__typename": "SearchContentManagementSearchItemGrid"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "__typename": "SearchContentManagementSearchItemGridHeader"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-16383764"
+      ],
+      "__typename": "SearchContentManagementSearchItemGrid"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-3111634"
+      ],
+      "__typename": "SearchContentManagementSearchItemGrid"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-21001771",
+       "items_24032-20992234",
+       "items_24032-19936005",
+       "items_24032-21001854",
+       "items_24032-18647730"
+      ],
+      "__typename": "SearchContentManagementSearchItemCarousel"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-305371"
+      ],
+      "__typename": "SearchContentManagementSearchItemGrid"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-19242784"
+      ],
+      "__typename": "SearchContentManagementSearchItemGrid"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-16507392"
+      ],
+      "__typename": "SearchContentManagementSearchItemGrid"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "__typename": "SearchContentManagementSearchLoadMore"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-17327097"
+      ],
+      "__typename": "SearchContentManagementSearchItemGrid"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-17770879"
+      ],
+      "__typename": "SearchContentManagementSearchItemGrid"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-17327025"
+      ],
+      "__typename": "SearchContentManagementSearchItemGrid"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-1456622"
+      ],
+      "__typename": "SearchContentManagementSearchItemGrid"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-305371",
+       "items_24032-19242784",
+       "items_24032-18649501",
+       "items_24032-18647815"
+      ],
+      "__typename": "SearchContentManagementSearchItemCarousel"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-20249671",
+       "items_24032-19981988",
+       "items_24032-20028017",
+       "items_24032-20028019",
+       "items_24032-25842687",
+       "items_24032-20129158",
+       "items_24032-60247023"
+      ],
+      "__typename": "SearchContentManagementSearchItemCarousel"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-16902710",
+       "items_24032-19967133",
+       "items_24032-20957684",
+       "items_24032-21221643",
+       "items_24032-19835836",
+       "items_24032-18647583",
+       "items_24032-20986614",
+       "items_24032-68872",
+       "items_24032-18648487",
+       "items_24032-19750627",
+       "items_24032-18647730",
+       "items_24032-20215391",
+       "items_24032-19907585",
+       "items_24032-23611426",
+       "items_24032-20129179",
+       "items_24032-20214659"
+      ],
+      "__typename": "SearchContentManagementSearchItemCarousel"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-16553260"
+      ],
+      "__typename": "SearchContentManagementSearchItemGrid"
+     }
+    },
+    {
+     "__typename": "SearchContentManagementSearchPlacement",
+     "content": {
+      "itemIds": [
+       "items_24032-17819978"
+      ],
+      "__typename": "SearchContentManagementSearchItemGrid"
+     }
+    }
+   ],
+   "__typename": "SearchResultsPlacements"
+  }
+ }
+}
