@@ -91,6 +91,12 @@
   .kind.staple, .kind.stocked { background:#eef0f3; color:#555; }
   .kind.on_list { background:#e8ecff; color:#2b3fa8; }
   #usage-table td:not(:first-child), #usage-table th:not(:first-child) { white-space:nowrap; color:var(--muted); }
+  .badge { font-size:.75rem; border-radius:999px; padding:2px 8px; margin-left:6px; white-space:nowrap; }
+  .badge.received { background:#e4f5ea; color:var(--ok); }
+  .badge.substituted { background:#fff4d6; color:#7a5300; }
+  .badge.out_of_stock, .badge.refunded { background:#fde8e8; color:#a12a2a; }
+  .orders .tag.in_cart { background:#e8ecff; color:#2b3fa8; }
+  .receipt-line { font-size:.9rem; margin:6px 0 0; }
   .hidden { display:none !important; }
   @media (max-width: 400px) { .thumb { width:44px; height:44px; } .results .thumb { width:36px; height:36px; } .sale, .price { white-space:normal; } }
 </style>
@@ -172,8 +178,8 @@
 
   <div id="tab-orders" class="hidden">
   <section id="orders-section">
-    <h2>Orders</h2>
-    <p class="muted">Everything sent to your cart from here, newest first. Totals are estimates from shelf prices at the time; Kroger may ring up differently. Tap an order to see its items.</p>
+    <div class="row between"><h2>Orders</h2><button id="orders-cart" class="secondary">Your Kroger cart</button></div>
+    <p class="muted">Everything sent to your cart from here, newest first. Kroger sends stay "in cart" until you say you checked out. Totals are estimates from shelf prices at the time; add the receipt to an order to see what you actually got and paid. Tap an order to see its items.</p>
     <div id="orders-banner" class="banner"></div>
     <ul id="orders" class="orders"></ul>
     <p id="orders-empty" class="muted hidden">No orders yet. Your next Send to cart will show up here.</p>
@@ -192,7 +198,8 @@
 
 <footer id="footer">
   <div class="inner">
-    <span id="footer-note" class="muted">Start from an empty Kroger cart, or quantities will double.</span>
+    <span><span id="footer-note" class="muted">Start from an empty Kroger cart, or quantities will double.</span>
+    <button id="footer-cart" class="link hidden"></button></span>
     <button id="push">Send to cart</button>
     <span class="row">
       <button id="open-store" class="hidden">Open at store</button>
@@ -271,6 +278,48 @@
   <div class="row">
     <button id="aldi-disconnect" class="secondary hidden">Disconnect</button>
     <button id="aldi-close" class="secondary">Close</button>
+  </div>
+</dialog>
+
+<dialog id="cart-dialog">
+  <h2>Your Kroger cart</h2>
+  <p class="muted">What this app has sent since your last checkout. Items you added on kroger.com or in the Kroger app aren't shown: Kroger doesn't let apps read the cart.</p>
+  <ul id="cart-items" class="results"></ul>
+  <p id="cart-empty" class="muted hidden">Nothing from this app is waiting in your cart.</p>
+  <div id="cart-banner" class="banner"></div>
+  <div class="row">
+    <button id="cart-checkout">I checked out</button>
+    <button id="cart-drop" class="secondary">I emptied my cart</button>
+    <a class="btn secondary" href="https://www.kroger.com/cart" target="_blank" rel="noopener">Open kroger.com/cart &#x2197;</a>
+    <button id="cart-close" class="secondary">Close</button>
+  </div>
+</dialog>
+
+<dialog id="overlap-dialog">
+  <h2>Already in your cart</h2>
+  <p class="muted">Kroger adds to what the cart holds, so sending these again would double them.</p>
+  <ul id="overlap-items" class="results"></ul>
+  <div class="row">
+    <button id="overlap-missing">Send only what's missing</button>
+    <button id="overlap-all" class="secondary">Send everything anyway</button>
+    <button id="overlap-cancel" class="secondary">Cancel</button>
+  </div>
+</dialog>
+
+<dialog id="receipt-dialog">
+  <h2>Add the receipt</h2>
+  <p class="muted">Paste the order email, the receipt, or the order page from kroger.com, or add screenshots. Claude matches it to this order: substitutions, out-of-stock items, refunds, the order number, what you paid and fuel points. A refund email that comes later can be added the same way.</p>
+  <p id="receipt-backend" class="muted"></p>
+  <textarea id="receipt-text" rows="8" placeholder="Paste the receipt or email here"></textarea>
+  <div class="row" style="margin-top:10px">
+    <input id="receipt-files" type="file" accept="image/*" multiple>
+    <span class="muted">Up to 4 screenshots.</span>
+  </div>
+  <div id="receipt-thumbs" class="thumbs"></div>
+  <div id="receipt-banner" class="banner"></div>
+  <div class="row">
+    <button id="receipt-go">Read receipt</button>
+    <button id="receipt-close" class="secondary">Cancel</button>
   </div>
 </dialog>
 

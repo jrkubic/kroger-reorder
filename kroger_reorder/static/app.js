@@ -9,7 +9,8 @@ let state = { store: null, signed_in: false, lists: [], active_list: null, name:
               stores: [],            // [{key, name, catalog, cart}] from /api/state: the stores a list can belong to
               store_key: 'kroger',   // the active list's store
               aldi_store: null,      // {store_name, address} or {error}, fetched once for Aldi lists
-              aldi_account: null };  // {name, email, connected_at} once an aldi.us sign-in is pasted in
+              aldi_account: null,    // {name, email, connected_at} once an aldi.us sign-in is pasted in
+              kroger_cart: { count: 0 } };  // products this app has put in the Kroger cart since the last checkout
 let importRows = [];  // [{raw, name, quantity, candidates, kind?, reason?, group?}]  (kind/reason/group only from Photo and Recipe)
 let orders = [];        // from GET /api/orders, newest first
 let openOrderId = null; // which order row is expanded
@@ -160,8 +161,12 @@ function render() {
   $('send-aldi').disabled = !!account && !anyChecked;
   $('aldi-account-line').classList.toggle('hidden', !(linked && account));
   $('aldi-account-label').textContent = account ? `${store.name} cart: ${account.name || account.email}` : '';
+  const inCart = state.kroger_cart.count;
   $('footer-note').textContent = linked && account ? `Sending sets each ${store.name} product to at least the list's quantity; it never doubles.`
-    : handOff ? 'Checked items are the ones you will shop for.' : 'Start from an empty Kroger cart, or quantities will double.';
+    : handOff ? 'Checked items are the ones you will shop for.'
+    : inCart ? 'In your Kroger cart from this app:' : 'Nothing from this app is in your Kroger cart.';
+  $('footer-cart').classList.toggle('hidden', handOff || !inCart);
+  $('footer-cart').textContent = plural(inCart, 'item');
   $('empty').textContent = catalog ? 'Nothing in this list yet. Search above to add items, or click Import.'
                                    : 'Nothing in this list yet. Type an item above and press Add, or click Import.';
   $('check-prices').disabled = !canPrice();
@@ -217,7 +222,7 @@ async function refreshLists() {
   const s = await api('GET', '/api/state');
   Object.assign(state, { store: s.store, signed_in: s.signed_in, lists: s.lists, active_list: s.active_list,
                          photo_backend: s.photo_backend, public_url: s.public_url, stores: s.stores || [],
-                         aldi_account: s.aldi_account || null });
+                         aldi_account: s.aldi_account || null, kroger_cart: s.kroger_cart || { count: 0 } });
 }
 
 async function loadList() {
@@ -939,6 +944,179 @@ async function loadUsage() {
   renderUsage((await api('GET', '/api/usage')).items);
 }
 
+// -- the Kroger cart as this app filled it (v7.3) --------------------------------------------
+
+async function refreshCart() {
+  try { state.kroger_cart = { count: (await api('GET', '/api/cart')).items.length }; } catch { /* keep the old count */ }
+  render();
+}
+
+function sentText(dates) {
+  return (dates || []).map(d => new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))
+    .filter((d, i, all) => all.indexOf(d) === i).join(', ');
+}
+
+// What to do when something being sent is already in the cart. Resolves 'missing', 'all', or null.
+function askOverlap(rows) {
+  return new Promise((resolve) => {
+    const dlg = $('overlap-dialog');
+    $('overlap-items').innerHTML = rows.map(r => `<li><div class="name"><div>${esc(r.name)}</div>` +
+      `<div class="size">${r.in_cart} in your cart (sent ${esc(sentText(r.sent_at))}), sending ${r.sending}</div></div></li>`).join('');
+    const done = (value) => { dlg.removeEventListener('close', onClose); dlg.close(); resolve(value); };
+    const onClose = () => done(null);
+    dlg.addEventListener('close', onClose);
+    $('overlap-missing').onclick = () => done('missing');
+    $('overlap-all').onclick = () => done('all');
+    $('overlap-cancel').onclick = () => done(null);
+    dlg.showModal();
+  });
+}
+
+// POST a Kroger send; when the server says some of it is already in the cart, ask and send again
+// with the answer. null = the user cancelled.
+async function sendKroger(path, body) {
+  try { return await api('POST', path, body); }
+  catch (e) {
+    if (!(e.data && e.data.overlap)) throw e;
+    const mode = await askOverlap(e.data.overlap);
+    if (!mode) return null;
+    return await api('POST', `${path}?mode=${mode}`, body);
+  }
+}
+
+async function openCart() {
+  banner(null, '', false, $('cart-banner'));
+  try {
+    const { items } = await api('GET', '/api/cart');
+    state.kroger_cart = { count: items.length };
+    $('cart-items').innerHTML = items.map(i => `<li>${thumb(i.image)}<div class="name"><div>${esc(i.name)}</div>` +
+      `<div class="size">${esc(i.size)} · sent ${esc(sentText(i.sent_at))}</div></div><span class="qty">&times;${i.quantity}</span></li>`).join('');
+    $('cart-empty').classList.toggle('hidden', items.length > 0);
+    $('cart-checkout').disabled = $('cart-drop').disabled = items.length === 0;
+    $('cart-dialog').showModal();
+  } catch (e) { banner('error', e.message); }
+}
+
+async function afterCartChange(message) {
+  $('cart-dialog').close();
+  await refreshCart();
+  const onOrders = !$('tab-orders').classList.contains('hidden');
+  if (onOrders) {
+    await loadOrders().catch(() => {});
+    loadUsage().catch(() => {});
+    banner('ok', message, false, $('orders-banner'));
+  } else banner('ok', message);
+}
+
+$('footer-cart').onclick = openCart;
+$('orders-cart').onclick = openCart;
+$('cart-close').onclick = () => $('cart-dialog').close();
+$('cart-checkout').onclick = async () => {
+  try {
+    const { order } = await api('POST', '/api/cart/checkout');
+    await afterCartChange(`Recorded as one order of ${plural(order.item_count, 'item')}. Add the receipt to it on the Orders tab when you have it.`);
+  } catch (e) { banner('error', e.message, false, $('cart-banner')); }
+};
+$('cart-drop').onclick = async () => {
+  if (!confirm('Forget what this app put in your Kroger cart? Those sends stay in Orders as dropped and don\'t count as purchases.')) return;
+  try {
+    await api('POST', '/api/cart/empty');
+    await afterCartChange('Your Kroger cart is empty here too.');
+  } catch (e) { banner('error', e.message, false, $('cart-banner')); }
+};
+
+// -- receipts (v7.3) ---------------------------------------------------------------------------
+
+let receiptOrderId = null;
+let receiptFiles = [];
+
+function openReceipt(orderId) {
+  receiptOrderId = orderId;
+  receiptFiles = [];
+  $('receipt-text').value = '';
+  $('receipt-files').value = '';
+  $('receipt-thumbs').innerHTML = '';
+  $('receipt-backend').textContent = backendText('Receipts are');
+  banner(null, '', false, $('receipt-banner'));
+  $('receipt-dialog').showModal();
+  $('receipt-text').focus();
+}
+
+$('receipt-close').onclick = () => $('receipt-dialog').close();
+$('receipt-files').onchange = async (e) => {
+  const files = Array.from(e.target.files || []).slice(0, PHOTO_MAX);
+  banner(null, '', false, $('receipt-banner'));
+  if ((e.target.files || []).length > PHOTO_MAX) banner('warn', `Only the first ${PHOTO_MAX} screenshots will be used.`, false, $('receipt-banner'));
+  try {
+    receiptFiles = await Promise.all(files.map(shrinkPhoto));
+    $('receipt-thumbs').innerHTML = receiptFiles.map(p => `<img src="${p.url}" alt="">`).join('');
+  } catch (err) {
+    receiptFiles = [];
+    $('receipt-thumbs').innerHTML = '';
+    banner('error', err.message, false, $('receipt-banner'));
+  }
+};
+$('receipt-go').onclick = async () => {
+  const rb = $('receipt-banner');
+  $('receipt-go').disabled = true;
+  try {
+    banner('warn', 'Claude is reading the receipt… this takes 10 to 30 seconds.', false, rb);
+    const { order } = await api('POST', `/api/orders/${encodeURIComponent(receiptOrderId)}/receipt`, {
+      text: $('receipt-text').value,
+      photos: receiptFiles.map(({ media_type, data }) => ({ media_type, data })),
+    });
+    orders = orders.map(o => o.id === order.id ? order : o);
+    openOrderId = order.id;
+    renderOrders();
+    loadUsage().catch(() => {});
+    $('receipt-dialog').close();
+    const counts = {};
+    order.items.forEach(i => { if (i.outcome) counts[i.outcome.status] = (counts[i.outcome.status] || 0) + 1; });
+    const bits = Object.entries(counts).filter(([k]) => k !== 'received').map(([k, n]) => `${n} ${OUTCOME_TEXT[k].toLowerCase()}`);
+    banner('ok', `Receipt added${bits.length ? `: ${bits.join(', ')}` : ''}.`, false, $('orders-banner'));
+  } catch (err) {
+    banner('error', err.message, false, rb);
+  } finally {
+    $('receipt-go').disabled = false;
+  }
+};
+
+const OUTCOME_TEXT = { received: 'Received', substituted: 'Substituted', out_of_stock: 'Out of stock', refunded: 'Refunded' };
+
+function outcomeHtml(item, order) {
+  const o = item.outcome;
+  if (!o || !OUTCOME_TEXT[o.status]) return '';
+  let html = `<span class="badge ${esc(o.status)}">${OUTCOME_TEXT[o.status]}</span>`;
+  if (o.status === 'substituted' && o.substitute) {
+    html += ` <span class="muted">got ${esc(o.substitute)}</span>`;
+    if (order.list_slug && state.lists.some(l => l.slug === order.list_slug)) {
+      html += ` <button class="link" data-find="${esc(o.substitute)}" data-find-list="${esc(order.list_slug)}" title="Search for it to add it to the list">Find it</button>`;
+    }
+  }
+  return html;
+}
+
+function receiptHtml(r) {
+  if (!r) return '';
+  const bits = [];
+  if (r.order_number) bits.push(`Order ${esc(r.order_number)}`);
+  if (r.date) bits.push(esc(r.date));
+  if (r.total != null) bits.push(`paid ${money(r.total)}`);
+  if (r.savings != null) bits.push(`saved ${money(r.savings)}`);
+  if (r.fuel_points != null) bits.push(`${r.fuel_points} fuel points`);
+  let html = `<p class="receipt-line">${bits.join(' · ') || 'Receipt added'}</p>`;
+  if (r.unmatched && r.unmatched.length) html += `<p class="receipt-line muted">Also on the receipt: ${r.unmatched.map(esc).join(', ')}</p>`;
+  return html;
+}
+
+async function findOnList(name, slug) {
+  showTab('list');
+  if (slug !== state.active_list) await switchList(slug);
+  $('term').value = name;
+  window.scrollTo(0, 0);
+  await search();
+}
+
 // -- orders dialog ---------------------------------------------------------------------------
 
 function whenText(iso) {
@@ -958,16 +1136,24 @@ function renderOrders() {
   orders.forEach(o => {
     const li = document.createElement('li');
     li.dataset.id = o.id;
-    const total = o.estimated_total != null ? ` · est. ${money(o.estimated_total)}` : '';
+    const paid = o.receipt && o.receipt.total != null ? ` · paid ${money(o.receipt.total)}` : '';
+    const total = (o.estimated_total != null ? ` · est. ${money(o.estimated_total)}` : '') + paid;
     const aldiOrder = o.cart === 'aldi';
-    const tag = (aldiOrder ? '<span class="tag">Aldi</span>' : '') + (o.reorder_of ? '<span class="tag">reorder</span>' : '');
+    const status = o.status || 'ordered';
+    const tag = (aldiOrder ? '<span class="tag">Aldi</span>' : '') + (o.reorder_of ? '<span class="tag">reorder</span>' : '') +
+      (status === 'in_cart' ? '<span class="tag in_cart">in cart</span>' : status === 'dropped' ? '<span class="tag">dropped</span>' : '') +
+      (o.receipt ? '<span class="tag">receipt</span>' : '');
+    const receiptButton = !aldiOrder && status === 'ordered'
+      ? `<button class="secondary" data-receipt="${esc(o.id)}">${o.receipt ? 'Add to receipt…' : 'Add receipt…'}</button>` : '';
     const details = o.id !== openOrderId ? '' : `
       <div class="details">
         <ul>${o.items.map(i => `<li>${thumb(i.image)}
-          <div class="name"><div>${esc(i.name)}</div><div class="size">${esc(i.size)} ${priceHtml(i)}</div></div>
+          <div class="name"><div>${esc(i.name)}${outcomeHtml(i, o)}</div><div class="size">${esc(i.size)} ${priceHtml(i)}</div></div>
           <span class="qty">&times;${i.quantity}</span></li>`).join('')}</ul>
+        ${receiptHtml(o.receipt)}
         <div class="row" style="margin-top:10px">
           <button data-reorder="${esc(o.id)}">${aldiOrder ? 'Send to Aldi cart again' : 'Send to cart again'}</button>
+          ${receiptButton}
           <button class="danger" data-delete-order="${esc(o.id)}">Delete</button>
         </div>
       </div>`;
@@ -1012,20 +1198,29 @@ $('orders').addEventListener('click', async (e) => {
   const obanner = $('orders-banner');
   const reorderId = e.target.dataset.reorder;
   const deleteId = e.target.dataset.deleteOrder;
+  if (e.target.dataset.receipt) { openReceipt(e.target.dataset.receipt); return; }
+  if (e.target.dataset.find) {
+    findOnList(e.target.dataset.find, e.target.dataset.findList).catch(err => banner('error', err.message));
+    return;
+  }
   if (reorderId) {
     e.target.disabled = true;
     banner(null, '', false, obanner);
     const source = orders.find(o => o.id === reorderId);
     try {
-      const { order, warning, bad_upcs } = await api('POST', `/api/orders/${encodeURIComponent(reorderId)}/reorder`);
+      const sent = await sendKroger(`/api/orders/${encodeURIComponent(reorderId)}/reorder`);
+      if (!sent) { e.target.disabled = false; return; }
+      const { order, warning, bad_upcs, already_in_cart } = sent;
       await loadOrders();
+      if (source?.cart !== 'aldi') refreshCart();
       const count = plural(order ? order.item_count : source.item_count, 'item');
       const done = source?.cart === 'aldi'
         ? `Sent ${count} to your Aldi cart. Finish checkout at <a href="https://www.aldi.us/store/aldi/storefront" target="_blank" rel="noopener">aldi.us</a>.`
         : `Sent ${count} to your Kroger cart. ` +
           `Finish checkout at <a href="https://www.kroger.com/cart" target="_blank" rel="noopener">kroger.com/cart</a> or in the Kroger app.`;
       const rejected = (bad_upcs || []).map(u => source?.items.find(i => i.upc === u)?.name || u);
-      const extra = (warning ? ` ${esc(warning)}` : '') + (rejected.length ? ` Aldi wouldn't take: ${rejected.map(esc).join(', ')}.` : '');
+      const extra = (warning ? ` ${esc(warning)}` : '') + (rejected.length ? ` Aldi wouldn't take: ${rejected.map(esc).join(', ')}.` : '') +
+        (already_in_cart && already_in_cart.length ? ` Already in your cart, not sent again: ${already_in_cart.map(esc).join(', ')}.` : '');
       banner(extra ? 'warn' : 'ok', done + extra, true, obanner);
     } catch (err) {
       if (err.data && err.data.aldi_signed_in === false) { state.aldi_account = null; render(); }
@@ -1059,11 +1254,17 @@ $('push').onclick = async () => {
   banner();
   $('push').disabled = true;
   try {
-    const { added, warning } = await api('POST', listPath('/push'), cleanItems());
+    const sent = await sendKroger(listPath('/push'), cleanItems());
+    if (!sent) { render(); return; }
+    const { added, warning, already_in_cart } = sent;
     state.items.forEach(i => delete i.bad);
-    const done = `Added to your Kroger cart: ${added.map(i => esc(i.name)).join(', ')}. ` +
-      `Finish checkout at <a href="https://www.kroger.com/cart" target="_blank" rel="noopener">kroger.com/cart</a> or in the Kroger app.`;
+    let done = `Added to your Kroger cart: ${added.map(i => `${esc(i.name)} \u00d7${i.quantity}`).join(', ')}. `;
+    if (already_in_cart && already_in_cart.length) done += `Already there, not sent again: ${already_in_cart.map(esc).join(', ')}. `;
+    done += `Finish checkout at <a href="https://www.kroger.com/cart" target="_blank" rel="noopener">kroger.com/cart</a> or in the Kroger app, then tell the app: ` +
+      `<button class="link" data-open-cart>I checked out</button>.`;
     banner(warning ? 'warn' : 'ok', warning ? `${done} ${esc(warning)}` : done, true);
+    await refreshCart();
+    return;
   } catch (e) {
     const bad = (e.data && e.data.bad_upcs) || [];
     state.items.forEach(i => { i.bad = bad.includes(i.upc); });
@@ -1071,5 +1272,7 @@ $('push').onclick = async () => {
   }
   render();
 };
+
+$('banner').addEventListener('click', (e) => { if (e.target.dataset.openCart !== undefined) openCart(); });
 
 load();
