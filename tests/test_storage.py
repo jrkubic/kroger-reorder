@@ -338,6 +338,23 @@ def test_tokens_roundtrip_and_clear(tmp_path):
     s.clear_tokens()
 
 
+def test_aldi_session_roundtrip_and_clear(tmp_path):
+    s = Storage(tmp_path)
+    assert s.load_aldi_session() is None
+    s.save_aldi_session({"sid": "v2.x", "name": "Pat", "email": "pat@example.com", "connected_at": "2026-11-06"})
+    assert s.load_aldi_session()["sid"] == "v2.x"
+    assert (tmp_path / "aldi_session.json").exists()
+    s.clear_aldi_session()
+    assert s.load_aldi_session() is None
+    s.clear_aldi_session()
+
+
+@pytest.mark.parametrize("text", ["not json", "[1]", '{"name": "Pat"}', '{"sid": ""}'])
+def test_unusable_aldi_session_reads_as_none(tmp_path, text):
+    (tmp_path / "aldi_session.json").write_text(text, encoding="utf-8")
+    assert Storage(tmp_path).load_aldi_session() is None
+
+
 # -- concurrency ---------------------------------------------------------------
 
 def _run_threads(workers):

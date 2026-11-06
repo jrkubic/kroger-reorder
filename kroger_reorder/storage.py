@@ -17,6 +17,7 @@ LEGACY_LIST = "list.json"
 DEFAULT_LIST_NAME = "Standard"
 DEFAULT_STORE = "kroger"  # the store a list belongs to when its file names none; see stores.py
 ORDERS_FILE = "orders.json"
+ALDI_SESSION_FILE = "aldi_session.json"  # a sign-in: treat like tokens.json
 
 UNTOUCHED = " Showing an empty list; the file is untouched until you add an item."
 
@@ -267,6 +268,23 @@ class Storage:
 
     def clear_tokens(self) -> None:
         self._path("tokens.json").unlink(missing_ok=True)
+
+    # -- Aldi sign-in (v7.2): the aldi.us session cookie the user pasted -------
+    def load_aldi_session(self) -> dict | None:
+        """{"sid", "name", "email", "connected_at"}, or None when absent or unusable."""
+        try:
+            raw = self._read(ALDI_SESSION_FILE)
+        except ValueError:
+            return None
+        if not isinstance(raw, dict) or not isinstance(raw.get("sid"), str) or not raw["sid"]:
+            return None
+        return raw
+
+    def save_aldi_session(self, session: dict) -> None:
+        self._write(ALDI_SESSION_FILE, session)
+
+    def clear_aldi_session(self) -> None:
+        self._path(ALDI_SESSION_FILE).unlink(missing_ok=True)
 
     # -- order history -------------------------------------------------------
     def _load_orders(self) -> list[dict]:
