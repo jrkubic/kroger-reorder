@@ -41,6 +41,7 @@ ACTIVE_CART_HASH = "6803f97683d706ab6faa3c658a0d6766299dbe1ff55f78b720ca2ef77de7
 CART_DATA_HASH = "05e3d7448576ff7d464c9244fb6687fabd1bdeee85fdf817e85487003cdb6d44"
 UPDATE_CART_HASH = "6dc50d918d98279dc148ef9a359cb5a66695d747253e9a2ec3bef5c86b42f319"
 SID_COOKIE = "__Host-instacart_sid"   # the aldi.us sign-in; the only cookie the cart needs
+SID_HOST = "www.aldi.us"              # the only host, over https only, that ever receives it
 GRID = "SearchContentManagementSearchItemGrid"   # one search result; carousels and ads are other types
 IMAGE_SIZE = "296x296"
 SEARCH_PAGE_SIZE = 48
@@ -299,9 +300,17 @@ class AldiClient:
 
     # -- the signed-in cart -----------------------------------------------------------------
     def _account_client(self, sid: str) -> httpx.Client:
+        """A client carrying the sign-in. The cookie is added per request, and only to
+        https://www.aldi.us: never over plain http, to another host, or after a redirect elsewhere
+        (a cookie-jar cookie would also match subdomains and http)."""
+        def attach(request: httpx.Request) -> None:
+            if request.url.scheme == "https" and request.url.host == SID_HOST:
+                others = request.headers.get("cookie")
+                request.headers["cookie"] = f"{SID_COOKIE}={sid}" + (f"; {others}" if others else "")
+
         http = self._new_client()
         http.headers["x-client-identifier"] = "web"
-        http.cookies.set(SID_COOKIE, sid, domain="www.aldi.us", path="/")
+        http.event_hooks["request"] = [attach]
         return http
 
     def _who(self, http: httpx.Client) -> dict:
@@ -361,12 +370,21 @@ class AldiClient:
                 return {u for u in batch if item_id(u) in took}
 
             products = list(want)
-            took = send(products)
-            if took is None:
-                # One bad product can sink a batch: find it by sending the rest one at a time.
-                took = set()
-                if len(products) > 1:
-                    for upc in products:
-                        took |= send([upc]) or set()
+            # Already there in at least the wanted amount: nothing to send, and it counts as added.
+            took = {u for u in products if have.get(u, 0) >= want[u]}
+            pending = [u for u in products if u not in took]
+            if pending:
+                sent = send(pending)
+                if sent is None and len(pending) > 1:
+                    # One bad product can sink a batch: find it by sending the rest one at a time. A
+                    # failure on one of those rejects that product only; what went in stays reported.
+                    sent = set()
+                    for upc in pending:
+                        try:
+                            sent |= send([upc]) or set()
+                        except AldiError as exc:
+                            if exc.message == SIGNED_OUT:
+                                raise
+                took |= sent or set()
             return CartResult(added=[u for u in products if u in took],
                               rejected=[u for u in products if u not in took])

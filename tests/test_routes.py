@@ -1115,6 +1115,22 @@ def test_connect_rejects_empty_and_guest_cookies(aldi_client, storage):
     assert storage.load_aldi_session() is None
 
 
+@pytest.mark.parametrize("pasted", ["v2.good\u2026", "v2.go od", "v2.good\nmore", "a=1; b=2"])
+def test_connect_refuses_something_that_isnt_a_cookie_value(aldi_client, storage, pasted):
+    r = aldi_client.put("/api/aldi/account", json={"sid": pasted})
+    assert r.status_code == 400 and r.json()["error"] == "That doesn't look like a cookie value; copy it again."
+    assert storage.load_aldi_session() is None
+
+
+def test_connect_when_aldi_us_is_unreachable_saves_nothing(aldi_client, storage, fake_aldi):
+    fake_aldi.accounts = None   # account() below raises before looking anything up
+    fake_aldi.error = AldiError(0, "Couldn't reach aldi.us: ConnectError")
+    fake_aldi.account = lambda sid: fake_aldi._check()
+    r = aldi_client.put("/api/aldi/account", json={"sid": "v2.good"})
+    assert r.status_code == 502 and r.json()["error"] == "Couldn't reach aldi.us: ConnectError"
+    assert storage.load_aldi_session() is None
+
+
 def test_connect_without_an_aldi_client(client):
     r = client.put("/api/aldi/account", json={"sid": "v2.good"})
     assert r.status_code == 400 and r.json()["error"] == "Aldi isn't configured."
@@ -1133,7 +1149,7 @@ CANDLES = {"upc": "candles", "name": "Candles", "size": ""}
 
 def test_push_aldi_needs_a_connected_cart_and_changes_nothing_without_one(aldi_client, aldi_list, fake_aldi):
     r = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[MILK_ALDI])
-    assert r.status_code == 400 and r.json()["error"] == "Connect your Aldi cart first."
+    assert r.status_code == 400 and r.json() == {"error": "Connect your Aldi cart first.", "aldi_signed_in": False}
     assert aldi_client.get(f"/api/lists/{aldi_list}").json()["items"] == [] and fake_aldi.cart_calls == []
 
 
@@ -1211,3 +1227,24 @@ def test_reorder_an_aldi_order_goes_to_the_aldi_cart(aldi_client, aldi_list, fak
 def test_kroger_orders_say_so(client, kroger):
     r = client.post("/api/lists/standard/push", json=[{**MILK, **FULL}])
     assert r.json()["order"]["cart"] == "kroger"
+
+
+def test_reorder_an_aldi_order_reports_rejections_and_sign_out(aldi_client, aldi_list, fake_aldi, storage, connected):
+    source = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[MILK_ALDI, EGGS_ALDI]).json()["order"]
+    fake_aldi.unknown = {"aldi:20957684"}
+    r = aldi_client.post(f"/api/orders/{source['id']}/reorder")
+    assert r.status_code == 200 and r.json()["bad_upcs"] == ["aldi:20957684"]
+    fake_aldi.unknown = {"aldi:16902710", "aldi:20957684"}
+    r = aldi_client.post(f"/api/orders/{source['id']}/reorder")
+    assert r.status_code == 502 and r.json()["error"] == "Aldi wouldn't add any of these items."
+    fake_aldi.accounts.clear()
+    r = aldi_client.post(f"/api/orders/{source['id']}/reorder")
+    assert r.status_code == 401 and r.json()["aldi_signed_in"] is False
+    assert storage.load_aldi_session() is None and len(storage.list_orders()) == 2
+
+
+def test_reorder_an_aldi_order_without_an_aldi_client(client, storage):
+    storage.record_order({"id": "a1", "placed_at": "2026-11-06T00:00:00+00:00", "cart": "aldi",
+                          "items": [{"upc": "aldi:1", "quantity": 1}]})
+    r = client.post("/api/orders/a1/reorder")
+    assert r.status_code == 400 and r.json()["error"] == "Aldi isn't configured."

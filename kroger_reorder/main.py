@@ -43,6 +43,8 @@ TRANSPORT_FAILURE_LIMIT = 3  # consecutive status-0 errors before a price refres
 NO_NAME = "Give the item a name."
 NO_UPC = "Search your store and pick a product."  # a Kroger list only holds catalog products
 CONNECT_ALDI = "Connect your Aldi cart first."
+# A cookie value as RFC 6265 allows it: printable ASCII without space, quote, comma, semicolon, backslash.
+COOKIE_VALUE = re.compile(r"[!#-+\--:<-\[\]-~]+")
 
 
 def utc_now() -> str:
@@ -355,6 +357,8 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         sid = sid.strip().strip('"').strip("'").strip()
         if not sid:
             return error(400, f"Paste the {SID_COOKIE} cookie value.")
+        if not COOKIE_VALUE.fullmatch(sid):
+            return error(400, "That doesn't look like a cookie value; copy it again.")
         try:
             who = aldi.account(sid)
         except AldiError as exc:
@@ -557,7 +561,7 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
 
     def push_aldi(slug: str, loaded: ListLoad, models: list[ItemModel]):
         if not storage.load_aldi_session():
-            return error(400, CONNECT_ALDI)   # before the body is saved, as for a refused push
+            return error(400, CONNECT_ALDI, aldi_signed_in=False)   # before the body is saved
         items = [Item(**m.model_dump()) for m in models]
         if models:
             storage.save_list(slug, loaded.name, items)
@@ -636,7 +640,7 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
             if aldi is None:
                 return error(400, "Aldi isn't configured.")
             if not storage.load_aldi_session():
-                return error(400, CONNECT_ALDI)
+                return error(400, CONNECT_ALDI, aldi_signed_in=False)
             return send_to_aldi([{**i, "upc": str(i["upc"])} for i in items], list_slug=source.get("list_slug"),
                                 list_name=source.get("list_name"), reorder_of=order_id)
         try:

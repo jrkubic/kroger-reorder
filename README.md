@@ -323,7 +323,7 @@ Aldi's login has a robot check, so the app can't sign in for you. It borrows the
 
 From then on **Send to Aldi cart** puts every checked Aldi product in your aldi.us cart, then you choose pickup or delivery and pay on aldi.us. Details:
 
-- aldi.us sets quantities rather than adding to them. Each product ends up with at least the list's quantity: sending twice never doubles, and a larger amount already in the cart is kept. There is no need to empty the cart first.
+- aldi.us sets quantities rather than adding to them. Each product ends up with at least the list's quantity: sending twice never doubles, and a larger amount already in the cart is kept (and not sent again). There is no need to empty the cart first.
 - Items added as typed have no Aldi product to send. The banner names them; shop them with **Open at Aldi**.
 - A product Aldi won't take (sold out, or gone from the catalog) is highlighted, and the rest are still added.
 - Every send is recorded in **Orders** with an Aldi tag, and **Send to Aldi cart again** repeats it.
@@ -587,9 +587,10 @@ Aldi's catalog has no public API either. The app reads it the way the aldi.us se
 | `Your Aldi sign-in has expired; connect your Aldi cart again.` | aldi.us no longer accepts the pasted cookie, usually after logging out there. Log in at aldi.us again and paste a fresh `__Host-instacart_sid`. Nothing was added. |
 | `That cookie isn't signed in to aldi.us. Log in at aldi.us first, then copy it again.` | The pasted value belongs to a browser that isn't logged in, or was mistyped. Log in at aldi.us, then copy the `__Host-instacart_sid` value again. |
 | `Paste the __Host-instacart_sid cookie value.` | The Connect box was empty. |
+| `That doesn't look like a cookie value; copy it again.` | The pasted text has spaces, semicolons or other characters a cookie value can't contain, often from copying a whole row or a shortened "…" value. Double-click the value in the developer tools to select all of it, and copy again. |
 | `Nothing checked is an Aldi product; use Open at Aldi for items added as typed.` | Only items added as typed are checked, and those have no Aldi product to send. Use **Open at Aldi**, or search and pick the Aldi product instead. |
 | `Nothing is checked to send.` | Every item is unchecked or has quantity 0. |
-| `Aldi wouldn't add any of these items.` | aldi.us refused every product, usually because they are sold out at your store or gone from its catalog. They are highlighted; search for replacements. |
+| `Aldi wouldn't add any of these items.` | aldi.us refused every product, usually because they are sold out at your store or gone from its catalog. On the list they are highlighted, on the Orders tab named; search for replacements. |
 | `Kroger lists are sent to the cart instead.` | **Open at &lt;store&gt;** was requested for a Kroger list. Use **Send to cart**. |
 | `Copy is not available here; select the text below and copy it.` | Browsers only allow one-click copy on `https://` or `localhost`. On a phone over plain http, the panel shows the text to select and copy by hand. |
 

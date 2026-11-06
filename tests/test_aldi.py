@@ -305,9 +305,9 @@ def test_a_guest_or_missing_user_is_signed_out(client, site, user):
 
 
 def test_fill_cart_sets_each_product_to_at_least_the_wanted_quantity(client, site):
-    # The cart already holds 2 bananas (fixture); the list wants 1 banana and 3 strawberries.
-    result = client.fill_cart(SID, [("aldi:25720157", 1), ("aldi:16383764", 3)])
-    assert updates(site) == [{"items_24032-25720157": 2.0, "items_24032-16383764": 3.0}]
+    # The cart already holds 2 bananas (fixture); the list wants 4 bananas and 3 strawberries.
+    result = client.fill_cart(SID, [("aldi:25720157", 4), ("aldi:16383764", 3)])
+    assert updates(site) == [{"items_24032-25720157": 4.0, "items_24032-16383764": 3.0}]
     assert (result.added, result.rejected) == (["aldi:25720157", "aldi:16383764"], [])
     mutation = [q for o, q in site.calls if o == "UpdateCartItemsMutation"][0]
     assert json.loads(mutation["variables"])["cartId"] == "20000000001"
@@ -340,7 +340,7 @@ def test_a_lone_unknown_product_is_rejected(client, site):
 def test_a_batch_error_is_retried_item_by_item(client, site):
     site.overrides["UpdateCartItemsMutation"] = [httpx.Response(200, json=UPDATE_ERROR)]
     site.unknown = {"items_24032-999"}
-    result = client.fill_cart(SID, [("aldi:25720157", 1), ("aldi:999", 1)])
+    result = client.fill_cart(SID, [("aldi:25720157", 3), ("aldi:999", 1)])
     assert (result.added, result.rejected) == (["aldi:25720157"], ["aldi:999"])
     assert len(updates(site)) == 3
 
@@ -361,5 +361,34 @@ def test_fill_cart_when_signed_out_changes_nothing(client, site):
 def test_fill_cart_on_a_changed_site(client, site):
     site.overrides["UpdateCartItemsMutation"] = [httpx.Response(400, json=NOT_SUPPORTED)]
     with pytest.raises(AldiError) as exc:
-        client.fill_cart(SID, [("aldi:25720157", 1)])
+        client.fill_cart(SID, [("aldi:25720157", 5)])
     assert exc.value.message == CHANGED
+
+
+def test_products_already_in_the_cart_are_not_sent_again(client, site):
+    # The fixture cart holds 2 bananas: wanting 1 or 2 is already satisfied.
+    result = client.fill_cart(SID, [("aldi:25720157", 2)])
+    assert (result.added, result.rejected) == (["aldi:25720157"], [])
+    assert "UpdateCartItemsMutation" not in site.ops()
+    result = client.fill_cart(SID, [("aldi:25720157", 1), ("aldi:16383764", 1)])
+    assert updates(site) == [{"items_24032-16383764": 1.0}]
+    assert result.added == ["aldi:25720157", "aldi:16383764"]
+
+
+def test_an_error_during_the_item_by_item_retry_keeps_what_was_added(client, site):
+    site.overrides["UpdateCartItemsMutation"] = [httpx.Response(200, json=UPDATE_ERROR),
+                                                 httpx.Response(200, json=UPDATE), httpx.Response(500)]
+    result = client.fill_cart(SID, [("aldi:25720157", 3), ("aldi:16383764", 1)])
+    assert (result.added, result.rejected) == (["aldi:25720157"], ["aldi:16383764"])
+
+
+@pytest.mark.parametrize("url", ["http://www.aldi.us/store/aldi/s?k=milk", "https://evil.www.aldi.us/x",
+                                 "https://account.aldi.us/x"])
+def test_the_sign_in_only_goes_to_www_aldi_us_over_https(client, site, url):
+    site.overrides["page"] = [httpx.Response(302, headers={"location": url}), httpx.Response(200, text=PAGE)]
+    try:
+        client.fill_cart(SID, [("aldi:25720157", 5)])
+    except AldiError:
+        pass
+    assert SID_COOKIE in site.cookies[0][1]          # the first, https://www.aldi.us request
+    assert SID_COOKIE not in site.cookies[1][1]      # the redirected one

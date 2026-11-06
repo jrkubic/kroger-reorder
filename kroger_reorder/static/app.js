@@ -478,6 +478,7 @@ function openAldiDialog() {
 
 $('aldi-account').onclick = openAldiDialog;
 $('aldi-close').onclick = () => $('aldi-dialog').close();
+$('aldi-dialog').addEventListener('close', () => { $('aldi-sid').value = ''; });   // never leave a sign-in in the page
 $('aldi-form').onsubmit = async (e) => {
   e.preventDefault();
   $('aldi-save').disabled = true;
@@ -1027,7 +1028,7 @@ $('orders').addEventListener('click', async (e) => {
       const extra = (warning ? ` ${esc(warning)}` : '') + (rejected.length ? ` Aldi wouldn't take: ${rejected.map(esc).join(', ')}.` : '');
       banner(extra ? 'warn' : 'ok', done + extra, true, obanner);
     } catch (err) {
-      if (err.data && err.data.aldi_signed_in === false) state.aldi_account = null;
+      if (err.data && err.data.aldi_signed_in === false) { state.aldi_account = null; render(); }
       const bad = (err.data && err.data.bad_upcs) || [];
       const names = bad.map(u => source?.items.find(i => i.upc === u)?.name || u);
       banner('error', err.message + (names.length ? ` Rejected: ${names.join(', ')}.` : ''), false, obanner);

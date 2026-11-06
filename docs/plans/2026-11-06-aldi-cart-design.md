@@ -87,6 +87,19 @@ offered his aldi.us account to find out whether it is possible.
    terms; Troubleshooting rows for every new string; Design documents; Version history v7.2);
    AGENTS.md (the not-done line, the trap about `aldi_session.json`); version 7.2.0.
 
+## Changes after review (2026-11-06)
+
+- Products already in the cart in at least the wanted amount are not sent; they count as added.
+- A failure while retrying one product at a time rejects that product only.
+- The cookie is attached per request, and only to `https://www.aldi.us` (a cookie-jar cookie would
+  also match subdomains and plain http on a redirect).
+- `PUT /api/aldi/account` refuses a value that isn't a valid cookie value (400 "That doesn't look
+  like a cookie value; copy it again.") instead of failing inside httpx.
+- "Connect your Aldi cart first." carries `aldi_signed_in: false` so a stale page resets.
+- As built: `/api/state` and the account routes return name, email and `connected_at` (never the
+  cookie); Aldi orders record `store_name: "Aldi"` without a store id; `CartResult` has only
+  `added` and `rejected`.
+
 ## Data flow
 
 Send on an Aldi list: page → `POST /api/lists/{slug}/push` (items) → storage saves the list →
