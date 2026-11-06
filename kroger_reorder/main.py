@@ -23,7 +23,8 @@ from pydantic import BaseModel
 from .aldi import SID_COOKIE, SIGNED_OUT, AldiError
 from .importer import parse as parse_import
 from .kroger import KrogerError, NotSignedIn
-from .orders import build_order
+from .orders import DROPPED, IN_CART, apply_receipt, build_order, cart_contents, in_cart, merge_checkout
+from .receipt import read as read_receipt
 from .recipe import extract as extract_recipe, fetch_page, suggest as suggest_recipe
 from .settings import DEFAULT_PHOTO_MODEL
 from .storage import DEFAULT_STORE, Item, ListLoad, Storage
@@ -43,6 +44,7 @@ TRANSPORT_FAILURE_LIMIT = 3  # consecutive status-0 errors before a price refres
 NO_NAME = "Give the item a name."
 NO_UPC = "Search your store and pick a product."  # a Kroger list only holds catalog products
 CONNECT_ALDI = "Connect your Aldi cart first."
+ALREADY_IN_CART = "Some of these are already in your Kroger cart."
 # A cookie value as RFC 6265 allows it: printable ASCII without space, quote, comma, semicolon, backslash.
 COOKIE_VALUE = re.compile(r"[!#-+\--:<-\[\]-~]+")
 
@@ -117,6 +119,11 @@ class RecipeRequest(BaseModel):
     note: str = ""
 
 
+class ReceiptRequest(BaseModel):
+    text: str = ""
+    photos: list[Photo] = []
+
+
 class ImportItem(BaseModel):
     upc: str = ""  # required on a Kroger list; ignored on a hand-off list
     name: str
@@ -143,12 +150,14 @@ class OrderNotFound(Exception):
 
 def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAULT_PHOTO_MODEL, photo_timeout: float = 90.0,
                analyzer=analyze_photos, page_fetcher=fetch_page, recipe_suggester=suggest_recipe,
+               receipt_reader=read_receipt,
                photo_backend: str | None = None,
                public_url: str = "http://localhost:8000") -> FastAPI:
     """`kroger` is a KrogerClient or anything with the same methods (tests pass a fake). `aldi` is an
     AldiClient or a fake; without one, Aldi lists work as plain lists.
     `analyzer` has the signature of vision.analyze; tests pass a fake so nothing external is called.
-    `page_fetcher(url) -> recipe.Page` and `recipe_suggester(...)` are the recipe equivalents of `analyzer`.
+    `page_fetcher(url) -> recipe.Page` and `recipe_suggester(...)` are the recipe equivalents of `analyzer`;
+    `receipt_reader` has the signature of receipt.read.
     `photo_backend` ('api' | 'cli' | None) and `public_url` are reported to the page via /api/state."""
     storage.ensure_ready()
     app = FastAPI(title="Kroger Reorder")
@@ -270,12 +279,69 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         """Save an order after the store accepted the cart. The cart is already filled, so a disk
         failure here is reported as a warning rather than an error."""
         store = current_store() if cart == KROGER else {"store_id": None, "store_name": provider(cart).name}
-        order = build_order(items, store=store, cart=cart, **meta)
+        # A Kroger send sits in the cart until the user says they checked out (or emptied it).
+        order = build_order(items, store=store, cart=cart, status=IN_CART if cart == KROGER else None, **meta)
         try:
             storage.record_order(order)
         except OSError as exc:
             return None, f"Sent to cart, but couldn't save it to your order history ({exc})."
         return order, None
+
+    def kroger_cart() -> list[dict]:
+        return cart_contents(storage.list_orders())
+
+    def plan_kroger_send(items: list[dict], mode: str | None) -> tuple[JSONResponse | None, list[dict], list[str]]:
+        """Check what is being sent against what this app already put in the Kroger cart (which adds
+        quantities). Without a mode, any overlap is a 409 the page asks about. "missing" sends only
+        the difference; "all" sends everything. Returns (refusal, items to send, names already there)."""
+        if mode not in (None, "missing", "all"):
+            return error(400, "mode must be 'missing' or 'all'."), [], []
+        have = {row["upc"]: row for row in kroger_cart()}
+        overlap = [{"upc": str(i["upc"]), "name": i.get("name") or have[str(i["upc"])].get("name") or "",
+                    "in_cart": have[str(i["upc"])]["quantity"], "sending": int(i["quantity"]),
+                    "sent_at": have[str(i["upc"])]["sent_at"]}
+                   for i in items if str(i["upc"]) in have]
+        if overlap and mode is None:
+            return error(409, ALREADY_IN_CART, overlap=overlap), [], []
+        if mode != "missing":
+            return None, items, []
+        to_send, already = [], []
+        for i in items:
+            left = int(i["quantity"]) - have.get(str(i["upc"]), {}).get("quantity", 0)
+            if left > 0:
+                to_send.append({**i, "quantity": left})
+            else:
+                already.append(i.get("name") or str(i["upc"]))
+        if not to_send:
+            return error(400, "Everything checked is already in your cart.", already_in_cart=already), [], already
+        return None, to_send, already
+
+    def decode_photos(photos: list[Photo]) -> JSONResponse | list[tuple[str, bytes]]:
+        if len(photos) > MAX_PHOTOS:
+            return error(413, f"At most {MAX_PHOTOS} photos at a time.")
+        decoded = []
+        for photo in photos:
+            ext = PHOTO_TYPES.get(photo.media_type.lower())
+            if not ext:
+                return error(415, "Photos must be JPEG, PNG, or WebP.")
+            try:
+                raw = base64.b64decode(photo.data, validate=True)
+            except (binascii.Error, ValueError):
+                return error(400, "A photo wasn't valid base64.")
+            if not raw:
+                return error(400, "A photo was empty.")
+            if len(raw) > MAX_PHOTO_BYTES:
+                return error(413, f"Each photo must be under {MAX_PHOTO_BYTES // (1024 * 1024)} MB.")
+            decoded.append((ext, raw))
+        return decoded
+
+    def write_photos(tmp: str, decoded: list[tuple[str, bytes]]) -> list[Path]:
+        paths = []
+        for n, (ext, raw) in enumerate(decoded, 1):
+            path = Path(tmp) / f"photo-{n}{ext}"
+            path.write_bytes(raw)
+            paths.append(path)
+        return paths
 
     # -- page / setup -----------------------------------------------------------------
     @app.middleware("http")
@@ -302,6 +368,7 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
                 "stores": [{"key": p.key, "name": p.name, "catalog": has_catalog(p), "cart": p.cart,
                             "linked_cart": has_linked_cart(p)} for p in PROVIDERS.values()],
                 "aldi_account": aldi_account(),
+                "kroger_cart": {"count": len(kroger_cart())},
                 **lists_payload()}
 
     @app.get("/api/stores")
@@ -576,8 +643,19 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
             sent["skipped"] = [i.name for i in chosen if not is_product("aldi", i.upc)]
         return sent
 
+    def send_to_kroger(items: list[dict], already: list[str], **meta) -> JSONResponse | dict:
+        """Add to the Kroger cart and record the send as in the cart."""
+        try:
+            kroger.add_to_cart([(str(i["upc"]), int(i["quantity"])) for i in items])
+        except NotSignedIn:
+            raise
+        except KrogerError as exc:
+            return error(502, kroger_message(exc), bad_upcs=rejected_upcs(exc, [str(i["upc"]) for i in items]))
+        order, warning = record_order(items, **meta)
+        return {"added": items, "order": order, "warning": warning, "already_in_cart": already}
+
     @app.post("/api/lists/{slug}/push")
-    def push(slug: str, models: list[ItemModel]):
+    def push(slug: str, models: list[ItemModel], mode: str | None = None):
         loaded = get_list(slug)
         p = provider_of(loaded)
         if has_linked_cart(p):
@@ -585,20 +663,17 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         if not p.cart:
             return hand_off_refused(p)  # before the body is saved: nothing changes on a refused push
         items = [Item(**m.model_dump()) for m in models]
+        chosen = [asdict(i) for i in items if i.included and i.quantity > 0]
+        refusal, to_send, already = plan_kroger_send(chosen, mode) if chosen else (None, [], [])
+        if refusal is not None and refusal.status_code == 409:
+            return refusal  # the page asks, then sends again with a mode; the list isn't saved yet
         if models:
             storage.save_list(slug, loaded.name, items)
-        chosen = [i for i in items if i.included and i.quantity > 0]
         if not chosen:
             return error(400, "Nothing is checked to send.")
-        try:
-            kroger.add_to_cart([(i.upc, i.quantity) for i in chosen])
-        except NotSignedIn:
-            raise
-        except KrogerError as exc:
-            return error(502, kroger_message(exc), bad_upcs=rejected_upcs(exc, [i.upc for i in chosen]))
-        sent = [asdict(i) for i in chosen]
-        order, warning = record_order(sent, list_slug=slug, list_name=loaded.name)
-        return {"added": sent, "order": order, "warning": warning}
+        if refusal is not None:
+            return refusal
+        return send_to_kroger(to_send, already, list_slug=slug, list_name=loaded.name)
 
     @app.get("/api/lists/{slug}/handoff")
     def handoff(slug: str):
@@ -627,7 +702,7 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         return Response(status_code=204)
 
     @app.post("/api/orders/{order_id}/reorder")
-    def reorder(order_id: str):
+    def reorder(order_id: str, mode: str | None = None):
         source = storage.get_order(order_id)
         if source is None:
             raise OrderNotFound(order_id)
@@ -643,15 +718,58 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
                 return error(400, CONNECT_ALDI, aldi_signed_in=False)
             return send_to_aldi([{**i, "upc": str(i["upc"])} for i in items], list_slug=source.get("list_slug"),
                                 list_name=source.get("list_name"), reorder_of=order_id)
-        try:
-            kroger.add_to_cart([(str(i["upc"]), int(i["quantity"])) for i in items])
-        except NotSignedIn:
-            raise
-        except KrogerError as exc:
-            return error(502, kroger_message(exc), bad_upcs=rejected_upcs(exc, [str(i["upc"]) for i in items]))
-        order, warning = record_order(items, list_slug=source.get("list_slug"),
-                                      list_name=source.get("list_name"), reorder_of=order_id)
-        return {"order": order, "warning": warning}
+        items = [{k: v for k, v in i.items() if k != "outcome"} | {"upc": str(i["upc"])} for i in items]
+        refusal, to_send, already = plan_kroger_send(items, mode)
+        if refusal is not None:
+            return refusal
+        return send_to_kroger(to_send, already, list_slug=source.get("list_slug"),
+                              list_name=source.get("list_name"), reorder_of=order_id)
+
+    # -- the Kroger cart as this app filled it ------------------------------------------------
+    @app.get("/api/cart")
+    def cart():
+        orders_ = storage.list_orders()
+        return {"items": cart_contents(orders_), "orders": len(in_cart(orders_))}
+
+    @app.post("/api/cart/checkout")
+    def checkout():
+        merged, removed = merge_checkout(storage.list_orders())
+        if merged is None:
+            return error(400, "Your Kroger cart is empty.")
+        storage.replace_orders(removed, merged)
+        return {"order": merged}
+
+    @app.post("/api/cart/empty")
+    def empty_cart():
+        sends = in_cart(storage.list_orders())
+        for order in sends:
+            storage.update_order({**order, "status": DROPPED})
+        return {"dropped": len(sends)}
+
+    @app.post("/api/orders/{order_id}/receipt")
+    def add_receipt(order_id: str, body: ReceiptRequest):
+        order = storage.get_order(order_id)
+        if order is None:
+            raise OrderNotFound(order_id)
+        if order.get("cart", KROGER) != KROGER:
+            return error(400, "Receipts are for Kroger orders.")
+        if order.get("status") == IN_CART:
+            return error(400, "This order is still in your cart; check out first.")
+        if order.get("status") == DROPPED:
+            return error(400, "This send was dropped from your cart.")
+        if not body.text.strip() and not body.photos:
+            return error(400, "Paste the receipt or add a screenshot.")
+        decoded = decode_photos(body.photos)
+        if isinstance(decoded, JSONResponse):
+            return decoded
+        with tempfile.TemporaryDirectory(prefix="kroger-receipt-") as tmp:
+            parsed = receipt_reader(body.text, write_photos(tmp, decoded), order.get("items", []),
+                                    model=photo_model, timeout=photo_timeout)
+        if not parsed.get("lines") and not any(parsed.get(k) for k in ("order_number", "total")):
+            return error(422, "Claude couldn't read a receipt in that.")
+        updated = apply_receipt(order, parsed)
+        storage.update_order(updated)
+        return {"order": updated}
 
     # -- usage profile, photo and recipe suggestions ---------------------------------------------
     @app.get("/api/usage")
@@ -663,30 +781,13 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         loaded = get_list(body.slug)  # 404 before any decoding or network
         if not body.photos:
             return error(400, "Add at least one photo.")
-        if len(body.photos) > MAX_PHOTOS:
-            return error(413, f"At most {MAX_PHOTOS} photos at a time.")
-        decoded = []
-        for photo in body.photos:
-            ext = PHOTO_TYPES.get(photo.media_type.lower())
-            if not ext:
-                return error(415, "Photos must be JPEG, PNG, or WebP.")
-            try:
-                raw = base64.b64decode(photo.data, validate=True)
-            except (binascii.Error, ValueError):
-                return error(400, "A photo wasn't valid base64.")
-            if not raw:
-                return error(400, "A photo was empty.")
-            if len(raw) > MAX_PHOTO_BYTES:
-                return error(413, f"Each photo must be under {MAX_PHOTO_BYTES // (1024 * 1024)} MB.")
-            decoded.append((ext, raw))
+        decoded = decode_photos(body.photos)
+        if isinstance(decoded, JSONResponse):
+            return decoded
         profile = profile_text(usage_profile(storage.list_orders()))
         # Photos live only for this request, in a private temp dir Claude Code is pointed at.
         with tempfile.TemporaryDirectory(prefix="kroger-photos-") as tmp:
-            paths = []
-            for n, (ext, raw) in enumerate(decoded, 1):
-                path = Path(tmp) / f"photo-{n}{ext}"
-                path.write_bytes(raw)
-                paths.append(path)
+            paths = write_photos(tmp, decoded)
             suggestions = analyzer(paths, body.note, loaded.name, loaded.items, profile,
                                    model=photo_model, timeout=photo_timeout)
         lines = [suggestion_line(s) for s in suggestions]
