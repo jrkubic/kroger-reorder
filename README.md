@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/jrkubic/kroger-reorder/actions/workflows/ci.yml/badge.svg)](https://github.com/jrkubic/kroger-reorder/actions/workflows/ci.yml)
 
-A small self-hosted web app that fills your Kroger pickup cart from saved grocery lists in one click. Keep several named lists, see product photos and sale prices, import and export lists as CSV, and look back at everything you have sent to the cart. Checkout (pickup time, payment) still happens in the Kroger app or at kroger.com, because Kroger's public API stops at the cart. Lists for Aldi, Meijer and Walmart live alongside. Aldi lists search Aldi's catalog with your store's prices and photos; all three end by opening the store's own site, since none of them offers a public cart API.
+A small self-hosted web app that fills your Kroger pickup cart from saved grocery lists in one click. Keep several named lists, see product photos and sale prices, import and export lists as CSV, and look back at everything you have sent to the cart. Checkout (pickup time, payment) still happens in the Kroger app or at kroger.com, because Kroger's public API stops at the cart. Lists for Aldi, Meijer and Walmart live alongside. Aldi lists search Aldi's catalog with your store's prices and photos, and can fill your own aldi.us cart once you connect it; all three can also end by opening the store's own site.
 
 Runs on a Windows PC, a Mac, a Linux box, or in Docker; is reachable from every phone on the same wifi; and stores everything as plain JSON files you can read and edit.
 
@@ -61,11 +61,16 @@ Or with Docker: `docker compose up -d`. Full details, including registering the 
 
 ![The Open at Aldi panel with a search link for each item and a Copy list button](img/handoff.png)
 
+**Fill your Aldi cart.** Connect your aldi.us sign-in once and **Send to Aldi cart** puts every checked Aldi product in your own cart; check out on aldi.us.
+
+![The Connect your Aldi cart dialog with three steps for copying the sign-in cookie](img/aldicart.png)
+
 ## Features
 
 - **Named lists.** Create, rename, duplicate, and delete lists. Check or uncheck items per trip and set quantities.
 - **Other stores.** A list can belong to Aldi, Meijer or Walmart instead of Kroger. Such a list ends with **Open at &lt;store&gt;**: a link per checked item on the store's own site plus a copyable text list. Import, Photo and Recipe work on them too.
 - **Aldi catalog.** Aldi lists search and match against aldi.us for your nearest store: product names, sizes, photos, prices and sale prices, refreshed like Kroger's. Items Aldi doesn't sell can still be added by name. Meijer and Walmart lists hold plain names.
+- **Aldi cart.** Paste your aldi.us sign-in once and **Send to Aldi cart** fills your own aldi.us cart with the list's checked Aldi products. Sending again never doubles quantities. Aldi sends are recorded in order history like Kroger ones.
 - **Catalog search.** Search your chosen store and add products with their photo, size, and price.
 - **Sale badges.** Promo prices show in green with the regular price struck through. Prices refresh in the background once a day or on demand.
 - **Send to cart.** Pushes every checked item to your Kroger cart through the official Cart API. Rejected items are highlighted so you can swap them.
@@ -77,7 +82,7 @@ Or with Docker: `docker compose up -d`. Full details, including registering the 
 - **Usage profile.** Derived from order history: how often you buy each item, the usual quantity, and when it is due again. Shown on the Orders tab and used to make photo suggestions smarter over time.
 - **Phone access.** The server binds to your LAN. Sign in once on the PC and every device shares it.
 - **Start with Windows.** One script installs a hidden startup entry so the app is always available. Docker users get the same with `restart: unless-stopped`.
-- **Plain files.** Lists, config, tokens, and history are JSON under `data/`. Corrupt files are moved aside, never deleted.
+- **Plain files.** Lists, config, sign-ins, and history are JSON under `data/`. Corrupt files are moved aside, never deleted.
 
 ## Technology
 
@@ -111,9 +116,9 @@ kroger-reorder/
 │   ├── __main__.py        Entry point: python -m kroger_reorder [--no-browser] [--launcher]
 │   ├── main.py            FastAPI app factory and every HTTP route
 │   ├── kroger.py          Kroger API client: OAuth, locations, products, cart
-│   ├── aldi.py            Aldi US catalog client: search, product lookups, store (reads aldi.us)
-│   ├── storage.py         JSON persistence: lists, config, tokens, order history
-│   ├── stores.py          The stores a list can belong to: Kroger (catalog, cart) and hand-off stores
+│   ├── aldi.py            Aldi US client: search, product lookups, store, and your signed-in cart
+│   ├── storage.py         JSON persistence: lists, config, tokens, Aldi sign-in, order history
+│   ├── stores.py          The stores a list can belong to: Kroger (catalog, cart), Aldi (catalog, linked cart), hand-off stores
 │   ├── orders.py          Builds an order snapshot after a successful send
 │   ├── importer.py        Parses text, Markdown, CSV, TSV, and JSON into lines
 │   ├── vision.py          Claude backends (Anthropic API or headless Claude Code) and photo suggestions
@@ -289,7 +294,7 @@ Phones on the wifi open the app by its normal address either way; they never nee
 
 ### Lists for Aldi, Meijer and Walmart
 
-Click **+**, name the list and pick the store. None of these stores has a public API the app could fill a cart through, so their lists end on the store's own site instead of in a cart.
+Click **+**, name the list and pick the store. None of these stores has a public API the app could fill a cart through, so their lists end on the store's own site. Aldi lists can also fill your own aldi.us cart through your sign-in; see [Sending to your Aldi cart](#sending-to-your-aldi-cart).
 
 **Aldi lists** search Aldi's catalog:
 
@@ -305,7 +310,24 @@ On every one of these lists:
 - Items without a product are keyed by their name, so adding "Bananas" twice gives one row with the quantity bumped.
 - Instead of **Send to cart** the footer offers **Open at &lt;store&gt;**. The panel lists every checked item with a link that opens in a new tab: the product's own page for a matched Aldi product, otherwise a search on the store's site. It also links to the site itself and has **Copy list** for a plain-text version to paste into a notes app or a text message.
 
-The store is chosen when the list is created. To move a list to another store, **Export CSV**, create a list at the new store, and **Import** the file: the item names are matched again there. Hand-off trips are not recorded in order history. Walmart catalog matching and a one-click cart link are planned once Walmart grants the app an affiliate API key.
+The store is chosen when the list is created. To move a list to another store, **Export CSV**, create a list at the new store, and **Import** the file: the item names are matched again there. Trips shopped through **Open at &lt;store&gt;** are not recorded in order history; sends to the Aldi cart are. Walmart catalog matching and a one-click cart link are planned once Walmart grants the app an affiliate API key.
+
+### Sending to your Aldi cart
+
+Aldi's login has a robot check, so the app can't sign in for you. It borrows the sign-in your browser already has instead, a value you copy once:
+
+1. On a computer, log in at https://www.aldi.us in Chrome, Edge or Firefox.
+2. Press F12 and open **Application** (Firefox: **Storage**), then **Cookies**, then `https://www.aldi.us`.
+3. Copy the value of `__Host-instacart_sid`.
+4. On an Aldi list, click **Connect Aldi cart…** in the footer, paste the value and click **Connect**. The line under the list then reads "Aldi cart: &lt;your first name&gt;"; **Change** next to it replaces or disconnects the sign-in.
+
+From then on **Send to Aldi cart** puts every checked Aldi product in your aldi.us cart, then you choose pickup or delivery and pay on aldi.us. Details:
+
+- aldi.us sets quantities rather than adding to them. Each product ends up with at least the list's quantity: sending twice never doubles, and a larger amount already in the cart is kept. There is no need to empty the cart first.
+- Items added as typed have no Aldi product to send. The banner names them; shop them with **Open at Aldi**.
+- A product Aldi won't take (sold out, or gone from the catalog) is highlighted, and the rest are still added.
+- Every send is recorded in **Orders** with an Aldi tag, and **Send to Aldi cart again** repeats it.
+- The sign-in lasts as long as aldi.us keeps it. Logging out at aldi.us ends it; the app then says so and asks you to connect again.
 
 ### Sale prices
 
@@ -371,11 +393,12 @@ Everything lives in `data/`, which is gitignored:
 | `orders.json` | Order history, newest first. |
 | `config.json` | Chosen store and active list. |
 | `tokens.json` | Kroger OAuth tokens. Delete it to sign out. |
+| `aldi_session.json` | Your aldi.us sign-in (the `__Host-instacart_sid` cookie), account first name and email. Treat it like a password; delete it, or click **Disconnect**, to forget it. |
 | `list.json.migrated` | Your v1 list, kept after the automatic upgrade to named lists. |
 
 An unreadable or malformed file is shown as a warning and moved aside as `<file>.corrupt-<timestamp>` before the app writes to it again. Nothing is ever deleted automatically.
 
-Credentials stay in `.env`, also gitignored. Nothing leaves your machine except calls to `api.kroger.com`; for Aldi lists, the search terms and product ids sent to `www.aldi.us` (read-only: the app never signs in there); for photo suggestions, the photos and note sent to Anthropic or Claude Code; and for recipe suggestions, the fetch of the recipe page by the computer running the app, plus the ingredient lines, the chosen list's item names, and your note sent to Anthropic or Claude Code. The page has no login; it trusts your home network, so do not expose port 8000 to the internet.
+Credentials stay in `.env`, also gitignored. Nothing leaves your machine except calls to `api.kroger.com`; for Aldi lists, the search terms and product ids sent to `www.aldi.us`, and once you connect your Aldi cart, your sign-in cookie and the products and quantities you send, to `www.aldi.us` only (the catalog searches never carry the sign-in); for photo suggestions, the photos and note sent to Anthropic or Claude Code; and for recipe suggestions, the fetch of the recipe page by the computer running the app, plus the ingredient lines, the chosen list's item names, and your note sent to Anthropic or Claude Code. The page has no login; it trusts your home network, so do not expose port 8000 to the internet.
 
 ## HTTP API
 
@@ -385,7 +408,7 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/state` | Kroger store, sign-in status, lists (each with its `store`), active list, `photo_backend` (`"api"`, `"cli"`, or `null`), `public_url`, and `stores` (the stores a list can belong to) |
+| `GET` | `/api/state` | Kroger store, sign-in status, lists (each with its `store`), active list, `photo_backend` (`"api"`, `"cli"`, or `null`), `public_url`, `stores` (the stores a list can belong to, with `catalog`, `cart` and `linked_cart`), and `aldi_account` (name, email, `connected_at`, or `null`; never the cookie) |
 | `GET` | `/api/stores?zip=` | Stores near a zip code |
 | `PUT` | `/api/store` | Choose a store |
 | `GET` | `/auth/login` | Redirect to Kroger OAuth |
@@ -403,11 +426,14 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 | `PUT` | `/api/active` | Set the active list |
 | `GET` | `/api/search?term=&store=` | Search a store's catalog: `kroger` (default, needs a chosen store) or `aldi` |
 | `GET` | `/api/aldi/store` | The Aldi store aldi.us picked for this connection (name, address) |
+| `GET` | `/api/aldi/account` | The connected Aldi account (name, email, `connected_at`) or `null` |
+| `PUT` | `/api/aldi/account` | Connect: `{"sid": "<__Host-instacart_sid value>"}`; checked with aldi.us before it is saved |
+| `DELETE` | `/api/aldi/account` | Disconnect: forget the stored sign-in |
 | `POST` | `/api/lists/{slug}/items` | Add one product (a plain `name` on an Aldi, Meijer or Walmart list) |
 | `PUT` | `/api/lists/{slug}/items` | Replace all items (quantities, checks) |
 | `DELETE` | `/api/lists/{slug}/items/{upc}` | Remove one item |
-| `POST` | `/api/lists/{slug}/prices` | Refresh prices from the catalog (Kroger lists only) |
-| `POST` | `/api/lists/{slug}/push` | Send checked items to the cart; records an order (Kroger lists only) |
+| `POST` | `/api/lists/{slug}/prices` | Refresh prices from the catalog (Kroger and Aldi lists) |
+| `POST` | `/api/lists/{slug}/push` | Send checked items to the cart and record an order: Kroger lists to Kroger's cart, Aldi lists to the connected aldi.us cart (answers also carry `skipped`, the checked items with no Aldi product) |
 | `GET` | `/api/lists/{slug}/export.csv` | Download the list as CSV |
 | `GET` | `/api/lists/{slug}/handoff` | Hand-off list only: checked items with a search link each on the store's site, plus a text version |
 
@@ -432,10 +458,10 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/orders` | Order history, newest first |
-| `POST` | `/api/orders/{id}/reorder` | Send a past order to the cart again |
+| `POST` | `/api/orders/{id}/reorder` | Send a past order to the cart it went to (`cart`: `kroger`, or `aldi`) again |
 | `DELETE` | `/api/orders/{id}` | Delete an order |
 
-A push that Kroger rejects returns `502` with `bad_upcs` listing the offending items. A push that succeeds but cannot be recorded returns `200` with `"order": null` and a `warning`.
+A push that Kroger rejects returns `502` with `bad_upcs` listing the offending items. An Aldi push returns `200` with `bad_upcs` when only some products were refused, `502` when all were, and `401` with `"aldi_signed_in": false` when the sign-in has expired (the stored one is then forgotten). A push that succeeds but cannot be recorded returns `200` with `"order": null` and a `warning`.
 
 ## Development
 
@@ -495,6 +521,7 @@ Run once after setup, or after changes that touch the Kroger client:
 | v6.2 Review groups and search | [docs/plans/2026-10-30-review-groups-search-design.md](docs/plans/2026-10-30-review-groups-search-design.md) | built directly from the design |
 | v7 Lists for Aldi, Meijer and Walmart | [docs/plans/2026-11-02-multi-store-design.md](docs/plans/2026-11-02-multi-store-design.md) | [docs/plans/2026-11-02-multi-store.md](docs/plans/2026-11-02-multi-store.md) |
 | v7.1 Aldi catalog | [docs/plans/2026-11-05-aldi-catalog-design.md](docs/plans/2026-11-05-aldi-catalog-design.md) | [docs/plans/2026-11-05-aldi-catalog.md](docs/plans/2026-11-05-aldi-catalog.md) |
+| v7.2 Aldi cart | [docs/plans/2026-11-06-aldi-cart-design.md](docs/plans/2026-11-06-aldi-cart-design.md) | [docs/plans/2026-11-06-aldi-cart.md](docs/plans/2026-11-06-aldi-cart.md) |
 
 ## Limitations
 
@@ -505,13 +532,14 @@ These come from Kroger's public API, not from the app:
 - It has no access to digital coupons. Clip them in the Kroger app.
 - Sign-in works from the machine running the app, or from the address in `PUBLIC_URL`. Other devices share the stored tokens.
 
-And from the other stores: Aldi, Meijer and Walmart have no public API an individual can fill a cart with (Aldi's online shop runs on Instacart, whose developer platform is closed to new applications; Meijer has none; Walmart's affiliate API needs approval). Lists for those stores hand off to the store's site instead of filling a cart.
+And from the other stores: Aldi, Meijer and Walmart have no public API an individual can fill a cart with (Aldi's online shop runs on Instacart, whose developer platform is closed to new applications; Meijer has none; Walmart's affiliate API needs approval). Meijer and Walmart lists hand off to the store's site; Aldi lists can also use your own sign-in, below.
 
 Aldi's catalog has no public API either. The app reads it the way the aldi.us search page does, by repeating the page's own requests, which Instacart's terms of use do not permit; this is a personal, read-only tool and makes a handful of requests per search. Expect, from that:
 
 - It can stop working whenever Instacart changes the site. Aldi lists then fall back to plain names (see [Troubleshooting](#troubleshooting)).
 - Prices are aldi.us online prices, which Instacart may set above shelf prices.
-- The store is the one aldi.us picks for the computer running the app's internet connection; it can't be chosen in the app yet.
+- The store is the one aldi.us picks for the computer running the app's internet connection; it can't be chosen in the app yet. Once your Aldi cart is connected, sends use your account's own store.
+- The Aldi cart works through your browser's sign-in cookie, pasted in by hand, because Aldi's login has a robot check the app does not try to get past. The cookie stops working when you log out at aldi.us or when aldi.us expires it, and must then be pasted again. Checkout, pickup times and payment stay on aldi.us.
 
 ## Troubleshooting
 
@@ -547,7 +575,7 @@ Aldi's catalog has no public API either. The app reads it the way the aldi.us se
 | `Unknown store '...'. Choose Kroger, Aldi, Meijer, or Walmart.` | A list file under `data/lists/` was edited to name a store the app does not know. Fix its `store` field. |
 | `Give the item a name.` | The **Add an item** box on an Aldi, Meijer or Walmart list was empty. |
 | `Search your store and pick a product.` | Something tried to add a bare name to a Kroger list; Kroger lists only hold catalog products. Use the search box, or create a list for another store. |
-| `This list is for Aldi; use Open at Aldi instead.` (or Meijer, Walmart) | **Send to cart** only works on Kroger lists, and **Check prices** on Kroger and Aldi lists. Reload the page if the buttons are showing on another list. |
+| `This list is for Aldi; use Open at Aldi instead.` (or Meijer, Walmart) | **Send to cart** works on Kroger lists and, through **Send to Aldi cart**, Aldi lists; **Check prices** on Kroger and Aldi lists. Reload the page if the buttons are showing on another list. |
 | `Aldi's site changed; Aldi lists work as plain lists until the app is updated.` | Instacart renamed the requests the app repeats. Aldi lists keep working by name. To restore search: open https://www.aldi.us/store/aldi/s?k=milk in a desktop browser with the developer tools' Network tab open, filter on `graphql`, and copy the `sha256Hash` from the `SearchResultsPlacements` request into `ALDI_SEARCH_HASH` in `.env` (and from `Items` into `ALDI_ITEMS_HASH`, from `GetRetailerLocationAddress` into `ALDI_LOCATION_HASH` if those fail too), then restart. Or update the app. |
 | `Couldn't reach aldi.us: ...` | The computer running the app can't reach the site. Check its connection; Aldi lists keep working by name meanwhile. |
 | `Aldi's site said HTTP ...` | aldi.us refused the request. Try again in a few minutes; if it persists the site may be blocking automated reads, and Aldi lists keep working by name. |
@@ -555,6 +583,13 @@ Aldi's catalog has no public API either. The app reads it the way the aldi.us se
 | `Couldn't check prices: ...` | A price check failed for every item; the message after the colon says why. |
 | `Meijer lists have no catalog; add items by name.` (or Walmart, or Aldi) | A catalog search was requested for a store without one, or for Aldi when the app runs without its Aldi client. Reload the page; start the app with `python -m kroger_reorder`. |
 | `Aldi isn't configured.` | The app was started without its Aldi client (only in tests or custom setups). Start it with `python -m kroger_reorder`. |
+| `Connect your Aldi cart first.` | **Send to Aldi cart** (or **Send to Aldi cart again**) without a stored sign-in. Click **Connect Aldi cart…** and paste the cookie; see [Sending to your Aldi cart](#sending-to-your-aldi-cart). |
+| `Your Aldi sign-in has expired; connect your Aldi cart again.` | aldi.us no longer accepts the pasted cookie, usually after logging out there. Log in at aldi.us again and paste a fresh `__Host-instacart_sid`. Nothing was added. |
+| `That cookie isn't signed in to aldi.us. Log in at aldi.us first, then copy it again.` | The pasted value belongs to a browser that isn't logged in, or was mistyped. Log in at aldi.us, then copy the `__Host-instacart_sid` value again. |
+| `Paste the __Host-instacart_sid cookie value.` | The Connect box was empty. |
+| `Nothing checked is an Aldi product; use Open at Aldi for items added as typed.` | Only items added as typed are checked, and those have no Aldi product to send. Use **Open at Aldi**, or search and pick the Aldi product instead. |
+| `Nothing is checked to send.` | Every item is unchecked or has quantity 0. |
+| `Aldi wouldn't add any of these items.` | aldi.us refused every product, usually because they are sold out at your store or gone from its catalog. They are highlighted; search for replacements. |
 | `Kroger lists are sent to the cart instead.` | **Open at &lt;store&gt;** was requested for a Kroger list. Use **Send to cart**. |
 | `Copy is not available here; select the text below and copy it.` | Browsers only allow one-click copy on `https://` or `localhost`. On a phone over plain http, the panel shows the text to select and copy by hand. |
 
@@ -586,6 +621,7 @@ Aldi's catalog has no public API either. The app reads it the way the aldi.us se
 | 2026-10-30 | v6.2 | Review table: Claude breaks categories into one row per product under a group heading; every row's dropdown can search the catalog for a different item |
 | 2026-11-02 | v7 | Lists for Aldi, Meijer and Walmart: a store per list, plain items, and an Open at store panel with a search link per item and a copyable list |
 | 2026-11-05 | v7.1 | Aldi catalog: Aldi lists search and match against aldi.us with your store's photos, sizes and prices; product-page links in Open at Aldi; plain fallback when the site changes |
+| 2026-11-06 | v7.2 | Aldi cart: connect your aldi.us sign-in once and Send to Aldi cart fills your own cart; sends never double; Aldi orders in history with reorder |
 
 ## License
 

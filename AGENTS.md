@@ -30,9 +30,9 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
 |---|---|
 | `kroger_reorder/main.py` | FastAPI app factory `create_app()` and every HTTP route |
 | `kroger_reorder/kroger.py` | Kroger API client: OAuth, locations, products, cart |
-| `kroger_reorder/aldi.py` | Aldi US catalog client: replays aldi.us's own GraphQL reads (search, items, store) |
+| `kroger_reorder/aldi.py` | Aldi US client: replays aldi.us's own GraphQL calls (search, items, store) and fills the signed-in cart (`account`, `fill_cart`) |
 | `kroger_reorder/storage.py` | JSON persistence; `Storage(data_dir)` is the only way in |
-| `kroger_reorder/stores.py` | The stores a list can belong to: Kroger (catalog, cart) and the hand-off stores Aldi, Meijer, Walmart (search links) |
+| `kroger_reorder/stores.py` | The stores a list can belong to: Kroger (catalog, cart), Aldi (catalog, linked cart) and the hand-off stores Meijer, Walmart (search links) |
 | `kroger_reorder/settings.py` | `.env` / environment parsing; every setting has a default here |
 | `kroger_reorder/vision.py` | Shared Claude call (`complete()`: Anthropic SDK or Claude Code CLI) and photo suggestions |
 | `kroger_reorder/recipe.py` | Recipe URL suggestions: fetch, JSON-LD extraction, prompt; shares `vision.complete()` |
@@ -96,6 +96,14 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
   persisted-query hashes are the usual culprit: update `SEARCH_HASH` / `ITEMS_HASH` / `LOCATION_HASH`
   (users can override them with `ALDI_*_HASH` in `.env`), refresh the fixtures, and check
   `parse_context` still finds the store context in the search page.
+- The Aldi cart (v7.2) uses the user's pasted aldi.us session cookie, kept in `aldi_session.json` in the
+  data folder. It is a sign-in: never log it, never return it from an API (the page sees name, email and
+  `connected_at`), and only `fill_cart` / `account` may send it, each on its own httpx client so the
+  anonymous catalog session never carries it. `Provider.linked_cart` marks a store whose cart works this
+  way; `cart` still means Kroger's API cart, so an Aldi list stays a hand-off list (plain items, Open at
+  Aldi) and `push` dispatches on `has_linked_cart(p)` first. Orders carry `cart` (`kroger` or `aldi`;
+  missing means Kroger) and reorder dispatches on it. aldi.us *sets* cart quantities, so `fill_cart`
+  sends `max(in cart, wanted)`.
 - `data/` under the checkout is the maintainer's live grocery data. Tests use `tmp_path`; manual
   Docker checks mount a scratch directory, never `./data`.
 - `.env` holds real credentials. Never print it, never commit it, never copy it into an image.
@@ -109,8 +117,10 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
 - Hiding the Photo button when no backend is configured: the dialog explains instead.
 - Importing raw ingredient lines without a Claude backend; scaling servings automatically (the note
   covers it).
-- Filling Aldi, Meijer or Walmart carts, or scraping meijer.com or walmart.com. Aldi's catalog is read
-  (v7.1, Jake's decision for a personal, read-only tool) but nothing is signed in to or bought there.
-  Walmart catalog matching through the walmart.io affiliate API is planned once a key is granted.
-  An Instacart sign-in to fill the Aldi cart is a possible v7.2.
+- Filling Meijer or Walmart carts, or scraping meijer.com or walmart.com. Aldi's catalog is read (v7.1)
+  and its cart filled through the user's own pasted sign-in (v7.2), Jake's decisions for a personal tool;
+  the app never signs in to aldi.us itself (its login has a captcha, deliberately not bypassed) and
+  never checks out. A bookmarklet run on aldi.us is the fallback if pasted cookies turn out to expire
+  within hours. Walmart catalog matching through the walmart.io affiliate API is planned once a key is
+  granted.
 - Changing a list's store after creation (export, create, import instead).
