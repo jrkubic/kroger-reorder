@@ -36,7 +36,8 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
 | `kroger_reorder/settings.py` | `.env` / environment parsing; every setting has a default here |
 | `kroger_reorder/vision.py` | Shared Claude call (`complete()`: Anthropic SDK or Claude Code CLI) and photo suggestions |
 | `kroger_reorder/recipe.py` | Recipe URL suggestions: fetch, JSON-LD extraction, prompt; shares `vision.complete()` |
-| `kroger_reorder/importer.py`, `orders.py`, `usage.py` | Import parsing, order snapshots, usage profile |
+| `kroger_reorder/receipt.py` | Reads a pasted Kroger receipt (text or screenshots) through `vision.complete()` |
+| `kroger_reorder/importer.py`, `orders.py`, `usage.py` | Import parsing, order snapshots + Kroger cart status / checkout merge / receipt outcomes, usage profile |
 | `kroger_reorder/static/` | `index.html` (page + styles) and `app.js` (all page logic) |
 | `kroger_reorder/__main__.py` | Entry point, startup banner, Windows headless logging |
 | `tests/` | One `test_<module>.py` per module, plus `test_docs.py` (README drift guard) |
@@ -104,6 +105,13 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
   Aldi) and `push` dispatches on `has_linked_cart(p)` first. Orders carry `cart` (`kroger` or `aldi`;
   missing means Kroger) and reorder dispatches on it. aldi.us *sets* cart quantities, so `fill_cart`
   sends `max(in cart, wanted)`.
+- Kroger orders carry `status` (v7.3): `in_cart` from the send until **I checked out** (`ordered`) or
+  **I emptied my cart** (`dropped`); no status means ordered (older orders, Aldi). Only ordered orders
+  feed `usage_profile`, and an item's receipt `outcome` overrides its quantity (out of stock and
+  refunded are skipped). Every Kroger send, push or reorder, goes through `plan_kroger_send`: overlap
+  with in-cart products is a 409 that saves nothing until the page resends with `mode`. Checkout
+  replaces the in-cart sends with one merged order, so receipts match one real Kroger order. Tests
+  that need purchases use `push_one`, which checks out after the send.
 - `data/` under the checkout is the maintainer's live grocery data. Tests use `tmp_path`; manual
   Docker checks mount a scratch directory, never `./data`.
 - `.env` holds real credentials. Never print it, never commit it, never copy it into an image.
@@ -113,6 +121,9 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
 
 - Digital coupon clipping: Kroger's public API has none; a kroger.com scraper was considered and
   postponed.
+- Reading the real Kroger cart, order history or loyalty points: the public API has none, and
+  kroger.com doesn't answer a plain HTTP client. The app tracks only its own sends and pasted receipts;
+  a browser extension on kroger.com is the unprobed alternative.
 - Multi-user auth, TLS, PyPI publishing, a container registry image, a non-root Docker user.
 - Hiding the Photo button when no backend is configured: the dialog explains instead.
 - Importing raw ingredient lines without a Claude backend; scaling servings automatically (the note

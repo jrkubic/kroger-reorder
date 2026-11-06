@@ -22,6 +22,7 @@ from . import __version__
 from .aldi import AldiClient
 from .kroger import KrogerClient
 from .main import create_app
+from .receipt import read as read_receipt
 from .recipe import suggest as suggest_recipe
 from .settings import load_settings
 from .storage import Storage
@@ -92,6 +93,7 @@ def main(argv: list[str] | None = None) -> None:
         photo_model=settings.photo_model, photo_timeout=settings.photo_timeout,
         analyzer=partial(analyze, api_key=settings.anthropic_api_key),
         recipe_suggester=partial(suggest_recipe, api_key=settings.anthropic_api_key),
+        receipt_reader=partial(read_receipt, api_key=settings.anthropic_api_key),
         photo_backend=backend, public_url=settings.public_url,
     )  # also migrates v1 data and ensures a default list
     if port_in_use(settings.port):

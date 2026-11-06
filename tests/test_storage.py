@@ -451,3 +451,17 @@ def test_wrong_shape_orders_file_is_backed_up_and_entries_without_id_are_skipped
     (tmp_path / "orders.json").write_text(json.dumps({"orders": [{"placed_at": "x"}, order("ok", "2026-10-26T13:00:00+00:00")]}),
                                           encoding="utf-8")
     assert [o["id"] for o in s.list_orders()] == ["ok"]
+
+
+def test_update_and_replace_orders(tmp_path):
+    st = Storage(tmp_path)
+    st.ensure_ready()
+    st.record_order({"id": "a", "placed_at": "2026-11-01T00:00:00+00:00", "items": []})
+    st.record_order({"id": "b", "placed_at": "2026-11-02T00:00:00+00:00", "items": []})
+    assert st.update_order({"id": "a", "placed_at": "2026-11-01T00:00:00+00:00", "items": [], "status": "ordered"})
+    assert st.get_order("a")["status"] == "ordered"
+    assert not st.update_order({"id": "zzz", "items": []})
+    assert st.change_orders(lambda orders: ([o for o in orders if o["id"] != "a"], len(orders))) == 2
+    assert [o["id"] for o in st.list_orders()] == ["b"]
+    assert st.change_orders(lambda orders: (None, "unchanged")) == "unchanged"
+    assert [o["id"] for o in st.list_orders()] == ["b"]

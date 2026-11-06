@@ -312,6 +312,25 @@ class Storage:
         with self._lock:
             self._write(ORDERS_FILE, {"orders": [order, *self._load_orders()]})
 
+    def update_order(self, order: dict) -> bool:
+        """Replace the stored order with the same id; False when there is none."""
+        with self._lock:
+            orders = self._load_orders()
+            if not any(o["id"] == order["id"] for o in orders):
+                return False
+            self._write(ORDERS_FILE, {"orders": [order if o["id"] == order["id"] else o for o in orders]})
+            return True
+
+    def change_orders(self, change):
+        """Read, change and write the order history under one lock, so two requests can't both act
+        on the same snapshot (a double-clicked checkout). `change(orders)` returns
+        `(new_orders or None, result)`; None writes nothing. Returns `result`."""
+        with self._lock:
+            new_orders, result = change(self._load_orders())
+            if new_orders is not None:
+                self._write(ORDERS_FILE, {"orders": new_orders})
+            return result
+
     def delete_order(self, order_id: str) -> bool:
         with self._lock:
             orders = self._load_orders()

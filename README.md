@@ -74,7 +74,9 @@ Or with Docker: `docker compose up -d`. Full details, including registering the 
 - **Catalog search.** Search your chosen store and add products with their photo, size, and price.
 - **Sale badges.** Promo prices show in green with the regular price struck through. Prices refresh in the background once a day or on demand.
 - **Send to cart.** Pushes every checked item to your Kroger cart through the official Cart API. Rejected items are highlighted so you can swap them.
+- **No doubled items.** The app remembers what it has put in your Kroger cart since your last checkout. Before a send that would add a product again, it shows what is already there and offers to send only what's missing. **I checked out** turns those sends into one order.
 - **Order history.** Every successful send is recorded with date, list, items, and an estimated total. Any past order can be sent to the cart again or deleted.
+- **Receipts.** Paste a Kroger receipt or order email (or add screenshots) to an order, and Claude records what actually happened: substitutions, out-of-stock items, refunds, the order number, what you paid, savings and fuel points. Usage then counts what you received.
 - **Import.** Plain text, Markdown checklists, CSV, TSV from a spreadsheet, JSON, or the app's own export. Reviewed in a table before adding, where any row can be re-matched by searching your store for a different item.
 - **Export.** Download any list as CSV. Re-importing it recreates the list exactly, on this or another install.
 - **Photo suggestions.** Photograph your fridge, pantry or cupboard from any device on the wifi, add a note, and Claude looks for gaps: what is low, what is missing given your purchase history, and what your note asks for. What is already stocked or on the list is shown too, preset to Skip. Every line is reviewed against the store catalog before it is added. Works through your own Anthropic API key, or through Claude Code installed on the host.
@@ -119,7 +121,8 @@ kroger-reorder/
 │   ├── aldi.py            Aldi US client: search, product lookups, store, and your signed-in cart
 │   ├── storage.py         JSON persistence: lists, config, tokens, Aldi sign-in, order history
 │   ├── stores.py          The stores a list can belong to: Kroger (catalog, cart), Aldi (catalog, linked cart), hand-off stores
-│   ├── orders.py          Builds an order snapshot after a successful send
+│   ├── orders.py          Order snapshots, what is in the Kroger cart, checkout, receipt outcomes
+│   ├── receipt.py         Reads a pasted Kroger receipt with Claude and matches it to an order
 │   ├── importer.py        Parses text, Markdown, CSV, TSV, and JSON into lines
 │   ├── vision.py          Claude backends (Anthropic API or headless Claude Code) and photo suggestions
 │   ├── recipe.py          Recipe URL suggestions: fetch, JSON-LD ingredients, Claude normalization
@@ -280,11 +283,12 @@ Phones on the wifi open the app by its normal address either way; they never nee
 
 ### Everyday flow
 
-1. Empty your Kroger cart in the Kroger app. The API can only add; it cannot see or clear what is already there.
-2. Open the app. Pick a list from the dropdown.
-3. Uncheck anything you do not need this trip and adjust quantities.
-4. Click **Send to cart**.
-5. In the Kroger app, choose a pickup time and pay.
+1. Open the app. Pick a list from the dropdown.
+2. Uncheck anything you do not need this trip and adjust quantities.
+3. Click **Send to cart**. If the app already put some of those products in your cart, it asks first (see [Your Kroger cart](#your-kroger-cart)).
+4. In the Kroger app, choose a pickup time and pay.
+5. Back in the app, click the cart link in the footer and **I checked out**.
+6. Optional: when the receipt arrives, add it to the order on the **Orders** tab.
 
 ### List controls
 
@@ -333,11 +337,32 @@ From then on **Send to Aldi cart** puts every checked Aldi product in your aldi.
 
 Items show a green sale price with the regular price struck through when your store has a promotion. Prices are refreshed in the background when you open a list that has not been checked in a day, or any time with **Check prices**. These are shelf promotions from Kroger's catalog. Digital coupons still have to be clipped in the Kroger app.
 
+### Your Kroger cart
+
+Kroger's API can add to your cart but can't read it, and adding a product that's already there adds to its quantity. So the app keeps its own record: every Kroger send stays "in your cart" until you say otherwise. The footer of a Kroger list shows how many products that is; click it (or **Your Kroger cart** on the Orders tab) to see them with the dates they were sent.
+
+- **Before each send**, the app compares the checked items with that record. If any are already in the cart it shows them ("Bananas: 2 in your cart (sent Nov 3), sending 2") and asks: **Send only what's missing** sends the difference and skips products already covered; **Send everything anyway** adds the full amounts; **Cancel** sends nothing. **Send to cart again** on the Orders tab asks the same way.
+- **I checked out** turns everything in the cart into one order, the way Kroger sees it. Sends count toward the usage profile only from then on.
+- **I emptied my cart** forgets the sends without counting them as purchases; they stay in Orders marked dropped.
+- A send that is still in the cart can't be deleted from Orders, since that would switch off the warning for its products; use one of the two buttons.
+
+It only knows what this app sent. Products you add on kroger.com or in the Kroger app aren't in the record, so the app can't warn about those.
+
+### Receipts
+
+On any checked-out Kroger order, **Add receipt…** takes the order email, the pickup receipt, the order page from kroger.com pasted as text, or up to four screenshots. Claude reads it (same backends as photo suggestions) and matches each line to the order's products:
+
+- **Substituted**: what you got instead, with **Find it** to search for it and add it to the list.
+- **Out of stock** and **Refunded**: not counted in the usage profile. A product that arrived only in part (2 of 3) counts what arrived, and a partial refund takes the refunded units off.
+- The order number, date, amount paid, savings and fuel points show on the order; receipt lines that match nothing (bag fees, extra items) are listed below it.
+
+A refund email that comes days later can be added to the same order with **Add to receipt…**: it changes only the lines it mentions.
+
 ### Order history
 
 Every successful **Send to cart** is saved with the date, the list it came from, the store, the items and quantities, and an estimated total from the prices known at that moment. The **Orders** tab shows them newest first; http://localhost:8000/#orders opens straight to it. Expand an order to see its items, send that exact order to your cart again, or delete it.
 
-History begins with the first send after this feature shipped. Kroger's public API has no way to read past orders. The estimate uses catalog prices, not your receipt.
+History begins with the first send after this feature shipped. Kroger's public API has no way to read past orders. The estimate uses catalog prices; add the receipt for what you actually paid.
 
 ### Importing
 
@@ -371,7 +396,7 @@ Requirements are the same as for [Photo suggestions](#photo-suggestions): an API
 
 ### Usage profile
 
-The **Usage** table on the Orders tab lists every product you have sent to the cart with how many times, the usual quantity, when you last bought it, and the average days between buys. It is computed from order history each time, so there is nothing extra to maintain, and it is what Claude reads when it suggests restocking.
+The **Usage** table on the Orders tab lists every product you have bought (checked-out orders only; with a receipt, what you received) with how many times, the usual quantity, when you last bought it, and the average days between buys. It is computed from order history each time, so there is nothing extra to maintain, and it is what Claude reads when it suggests restocking.
 
 ### Exporting
 
@@ -390,7 +415,7 @@ Everything lives in `data/`, which is gitignored:
 | File | Contents |
 |---|---|
 | `lists/<slug>.json` | One file per list, with the store it belongs to (`store`; missing means Kroger). Safe to edit by hand. |
-| `orders.json` | Order history, newest first. |
+| `orders.json` | Order history, newest first. Kroger sends carry `status` (`in_cart`, `ordered`, `dropped`; none means ordered); orders with a receipt carry `receipt` and an `outcome` per item. |
 | `config.json` | Chosen store and active list. |
 | `tokens.json` | Kroger OAuth tokens. Delete it to sign out. |
 | `aldi_session.json` | Your aldi.us sign-in (the `__Host-instacart_sid` cookie), account first name and email. Treat it like a password; delete it, or click **Disconnect**, to forget it. |
@@ -398,7 +423,7 @@ Everything lives in `data/`, which is gitignored:
 
 An unreadable or malformed file is shown as a warning and moved aside as `<file>.corrupt-<timestamp>` before the app writes to it again. Nothing is ever deleted automatically.
 
-Credentials stay in `.env`, also gitignored. Nothing leaves your machine except calls to `api.kroger.com`; for Aldi lists, the search terms and product ids sent to `www.aldi.us`, and once you connect your Aldi cart, your sign-in cookie and the products and quantities you send, to `www.aldi.us` only (the catalog searches never carry the sign-in); for photo suggestions, the photos and note sent to Anthropic or Claude Code; and for recipe suggestions, the fetch of the recipe page by the computer running the app, plus the ingredient lines, the chosen list's item names, and your note sent to Anthropic or Claude Code. The page has no login; it trusts your home network, so do not expose port 8000 to the internet.
+Credentials stay in `.env`, also gitignored. Nothing leaves your machine except calls to `api.kroger.com`; for Aldi lists, the search terms and product ids sent to `www.aldi.us`, and once you connect your Aldi cart, your sign-in cookie and the products and quantities you send, to `www.aldi.us` only (the catalog searches never carry the sign-in); for photo suggestions, the photos and note sent to Anthropic or Claude Code; for receipts, the pasted text or screenshots and the order's item names sent to Anthropic or Claude Code; and for recipe suggestions, the fetch of the recipe page by the computer running the app, plus the ingredient lines, the chosen list's item names, and your note sent to Anthropic or Claude Code. The page has no login; it trusts your home network, so do not expose port 8000 to the internet.
 
 ## HTTP API
 
@@ -458,8 +483,19 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/orders` | Order history, newest first |
-| `POST` | `/api/orders/{id}/reorder` | Send a past order to the cart it went to (`cart`: `kroger`, or `aldi`) again |
+| `POST` | `/api/orders/{id}/reorder` | Send a past order to the cart it went to (`cart`: `kroger`, or `aldi`) again; Kroger takes `?mode=` like a push |
+| `POST` | `/api/orders/{id}/receipt` | `{text, photos}`: read a receipt with Claude and record substitutions, out-of-stock items, refunds and totals on the order |
 | `DELETE` | `/api/orders/{id}` | Delete an order |
+
+### Kroger cart
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/cart` | What this app put in the Kroger cart since the last checkout, one row per product |
+| `POST` | `/api/cart/checkout` | Turn the in-cart sends into one ordered order |
+| `POST` | `/api/cart/empty` | Mark the in-cart sends as dropped |
+
+A Kroger push or reorder that would add a product already in that record returns `409` with `overlap` (`[{upc, name, in_cart, sending, sent_at}]`) and changes nothing, not even the list. Send again with `?mode=missing` (only the difference; covered products come back in `already_in_cart`) or `?mode=all`.
 
 A push that Kroger rejects returns `502` with `bad_upcs` listing the offending items. An Aldi push returns `200` with `bad_upcs` when only some products were refused, `502` when all were, and `401` with `"aldi_signed_in": false` when the sign-in has expired (the stored one is then forgotten). A push that succeeds but cannot be recorded returns `200` with `"order": null` and a `warning`.
 
@@ -522,13 +558,14 @@ Run once after setup, or after changes that touch the Kroger client:
 | v7 Lists for Aldi, Meijer and Walmart | [docs/plans/2026-11-02-multi-store-design.md](docs/plans/2026-11-02-multi-store-design.md) | [docs/plans/2026-11-02-multi-store.md](docs/plans/2026-11-02-multi-store.md) |
 | v7.1 Aldi catalog | [docs/plans/2026-11-05-aldi-catalog-design.md](docs/plans/2026-11-05-aldi-catalog-design.md) | [docs/plans/2026-11-05-aldi-catalog.md](docs/plans/2026-11-05-aldi-catalog.md) |
 | v7.2 Aldi cart | [docs/plans/2026-11-06-aldi-cart-design.md](docs/plans/2026-11-06-aldi-cart-design.md) | [docs/plans/2026-11-06-aldi-cart.md](docs/plans/2026-11-06-aldi-cart.md) |
+| v7.3 Kroger cart awareness and receipts | [docs/plans/2026-11-06-kroger-cart-receipts-design.md](docs/plans/2026-11-06-kroger-cart-receipts-design.md) | [docs/plans/2026-11-06-kroger-cart-receipts.md](docs/plans/2026-11-06-kroger-cart-receipts.md) |
 
 ## Limitations
 
 These come from Kroger's public API, not from the app:
 
-- It can add to the cart but cannot read, clear, or check out the cart. Start from an empty cart or quantities double.
-- It cannot read past orders. History covers only what this app sent.
+- It can add to the cart but cannot read, clear, or check out the cart. The app warns about products it sent itself; anything added on kroger.com or in the Kroger app still doubles if you send it too.
+- It cannot read past orders, receipts, substitutions, refunds, or your loyalty or fuel points balance. History covers only what this app sent, and receipt details only what you paste.
 - It has no access to digital coupons. Clip them in the Kroger app.
 - Sign-in works from the machine running the app, or from the address in `PUBLIC_URL`. Other devices share the stored tokens.
 
@@ -550,6 +587,15 @@ Aldi's catalog has no public API either. The app reads it the way the aldi.us se
 | The sign-in button came back | Kroger rejected the refresh token. Sign in again; your lists are untouched. |
 | An item is highlighted red after sending | Kroger rejected that UPC, often because it was discontinued. Remove it and search for a replacement. |
 | `Kroger said: ...` | The raw message from Kroger's API. If it mentions rate limits, wait a minute. |
+| `Already in your cart` dialog | The app sent some of these products before and you haven't checked out since. Choose **Send only what's missing**, or click the cart link in the footer and **I checked out** / **I emptied my cart** if that's out of date. |
+| `Everything checked is already in your cart.` | With **Send only what's missing**, nothing was left to add. |
+| `Your Kroger cart is empty.` | **I checked out** with nothing sent since the last checkout. |
+| `This order is still in your cart; check out first.` | Receipts go on checked-out orders: click the cart link and **I checked out**. |
+| `Paste the receipt or add a screenshot.` | The receipt dialog was empty. |
+| `Receipts are for Kroger orders.` / `This send was dropped from your cart.` | Only checked-out Kroger orders take a receipt. |
+| `This send is still in your Kroger cart; use I checked out or I emptied my cart instead.` | Deleting it would switch off the doubling warning for its products. |
+| `...couldn't save it to your order history... can't warn before sending them again.` | The send reached Kroger but `data/orders.json` couldn't be written. Check the disk; until then the app doesn't know those products are in your cart. |
+| `Claude couldn't read a receipt in that.` | Claude found no order number, total or product lines. Paste the whole email, or use screenshots. |
 | `Port 8000 is already in use` | Another copy is running, or something else owns the port. Close it, or set `PORT` in `.env` and update the redirect URL on your Kroger app to match. |
 | Phone cannot reach the wifi address | Allow `python.exe` / `pythonw.exe` through Windows Firewall on private networks, and confirm the PC's address has not changed. |
 | Cannot sign in from a phone | Expected. Sign in once from the PC, or from the address in `PUBLIC_URL`. |
@@ -623,6 +669,7 @@ Aldi's catalog has no public API either. The app reads it the way the aldi.us se
 | 2026-11-02 | v7 | Lists for Aldi, Meijer and Walmart: a store per list, plain items, and an Open at store panel with a search link per item and a copyable list |
 | 2026-11-05 | v7.1 | Aldi catalog: Aldi lists search and match against aldi.us with your store's photos, sizes and prices; product-page links in Open at Aldi; plain fallback when the site changes |
 | 2026-11-06 | v7.2 | Aldi cart: connect your aldi.us sign-in once and Send to Aldi cart fills your own cart; sends never double; Aldi orders in history with reorder |
+| 2026-11-06 | v7.3 | Kroger cart awareness: the app tracks what it sent until you check out and asks before doubling; checkout merges sends into one order; paste a receipt to record substitutions, out-of-stock items, refunds, totals and fuel points |
 
 ## License
 

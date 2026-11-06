@@ -2,6 +2,7 @@
 import base64
 import json
 import re
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -102,7 +103,7 @@ def test_initial_state_has_default_list(client):
                    {"key": "aldi", "name": "Aldi", "catalog": False, "cart": False, "linked_cart": False},
                    {"key": "meijer", "name": "Meijer", "catalog": False, "cart": False, "linked_cart": False},
                    {"key": "walmart", "name": "Walmart", "catalog": False, "cart": False, "linked_cart": False}],
-        "aldi_account": None,
+        "aldi_account": None, "kroger_cart": {"count": 0},
     }
 
 
@@ -680,8 +681,13 @@ def test_push_still_succeeds_when_history_cannot_be_written(client, storage, mon
 
 # -- orders ------------------------------------------------------------------------------
 
-def push_one(client, **over):
+def push_one(client, checkout=True, **over):
+    """Send Milk and, by default, check out, so the send is a purchase and the cart is empty again."""
     r = client.post("/api/lists/standard/push", json=[{**MILK, **FULL, "price": 3.49, **over}])
+    assert r.status_code == 200
+    if not checkout:
+        return r.json()["order"]
+    r = client.post("/api/cart/checkout")
     assert r.status_code == 200
     return r.json()["order"]
 
@@ -1248,3 +1254,251 @@ def test_reorder_an_aldi_order_without_an_aldi_client(client, storage):
                           "items": [{"upc": "aldi:1", "quantity": 1}]})
     r = client.post("/api/orders/a1/reorder")
     assert r.status_code == 400 and r.json()["error"] == "Aldi isn't configured."
+
+
+# -- v7.3: the Kroger cart as this app filled it, and receipts -----------------------------------
+
+def send(client, *items, mode=None):
+    url = "/api/lists/standard/push" + (f"?mode={mode}" if mode else "")
+    return client.post(url, json=[{**FULL, **i} for i in items])
+
+
+def test_send_is_recorded_in_the_cart(client, kroger):
+    r = send(client, {**MILK, "quantity": 2})
+    assert r.status_code == 200
+    assert r.json()["order"]["status"] == "in_cart" and r.json()["already_in_cart"] == []
+    cart = client.get("/api/cart").json()
+    assert cart["orders"] == 1
+    assert [(i["upc"], i["quantity"]) for i in cart["items"]] == [("0001", 2)]
+    assert client.get("/api/state").json()["kroger_cart"] == {"count": 1}
+    assert client.get("/api/usage").json()["items"] == []   # not a purchase until checkout
+
+
+def test_overlap_is_409_and_changes_nothing(client, kroger, storage):
+    send(client, {**MILK, "quantity": 2})
+    kroger.cart_calls.clear()
+    r = send(client, {**MILK, "quantity": 2}, {**EGGS, "quantity": 1})
+    assert r.status_code == 409
+    body = r.json()
+    assert body["error"] == "Some of these are already in your Kroger cart."
+    (row,) = body["overlap"]
+    assert row["upc"] == "0001" and row["name"] == "Whole Milk" and row["in_cart"] == 2 and row["sending"] == 2
+    assert len(row["sent_at"]) == 1
+    assert kroger.cart_calls == []
+    assert [i.upc for i in storage.load_list("standard").items] == ["0001"]   # the list wasn't saved
+
+
+def test_mode_missing_sends_only_the_difference(client, kroger):
+    send(client, {**MILK, "quantity": 2})
+    kroger.cart_calls.clear()
+    r = send(client, {**MILK, "quantity": 3}, {**EGGS, "quantity": 1}, mode="missing")
+    assert r.status_code == 200
+    assert kroger.cart_calls == [[("0001", 1), ("0002", 1)]]
+    assert r.json()["already_in_cart"] == []
+    kroger.cart_calls.clear()
+    r = send(client, {**MILK, "quantity": 2}, {**EGGS, "quantity": 2}, mode="missing")
+    assert kroger.cart_calls == [[("0002", 1)]]
+    assert r.json()["already_in_cart"] == ["Whole Milk"]
+
+
+def test_mode_missing_with_everything_there_is_400(client, kroger):
+    send(client, {**MILK, "quantity": 2})
+    kroger.cart_calls.clear()
+    r = send(client, {**MILK, "quantity": 1}, mode="missing")
+    assert r.status_code == 400
+    assert r.json() == {"error": "Everything checked is already in your cart.", "already_in_cart": ["Whole Milk"]}
+    assert kroger.cart_calls == []
+
+
+def test_mode_all_sends_everything(client, kroger):
+    send(client, {**MILK, "quantity": 2})
+    kroger.cart_calls.clear()
+    assert send(client, {**MILK, "quantity": 2}, mode="all").status_code == 200
+    assert kroger.cart_calls == [[("0001", 2)]]
+    assert client.get("/api/cart").json()["items"][0]["quantity"] == 4
+
+
+def test_bad_mode_is_400(client):
+    send(client, {**MILK})
+    assert send(client, {**MILK}, mode="twice").status_code == 400
+
+
+def test_checkout_merges_sends_into_one_order(client):
+    send(client, {**MILK, "quantity": 2})
+    send(client, {**EGGS, "quantity": 1})
+    r = client.post("/api/cart/checkout")
+    assert r.status_code == 200
+    order = r.json()["order"]
+    assert order["status"] == "ordered" and len(order["merged_from"]) == 2
+    assert {i["upc"]: i["quantity"] for i in order["items"]} == {"0001": 2, "0002": 1}
+    assert [o["id"] for o in client.get("/api/orders").json()["orders"]] == [order["id"]]
+    assert client.get("/api/cart").json() == {"items": [], "orders": 0}
+    assert {r["upc"] for r in client.get("/api/usage").json()["items"]} == {"0001", "0002"}
+    assert client.post("/api/cart/checkout").json() == {"error": "Your Kroger cart is empty."}
+
+
+def test_empty_cart_drops_sends(client):
+    send(client, {**MILK})
+    r = client.post("/api/cart/empty")
+    assert r.json() == {"dropped": 1}
+    assert client.get("/api/cart").json()["items"] == []
+    (order,) = client.get("/api/orders").json()["orders"]
+    assert order["status"] == "dropped"
+    assert client.get("/api/usage").json()["items"] == []
+
+
+def test_reorder_checks_the_cart_too(client, kroger):
+    source = push_one(client, quantity=2)
+    send(client, {**MILK, "quantity": 1})
+    kroger.cart_calls.clear()
+    r = client.post(f"/api/orders/{source['id']}/reorder")
+    assert r.status_code == 409 and r.json()["overlap"][0]["in_cart"] == 1
+    r = client.post(f"/api/orders/{source['id']}/reorder?mode=missing")
+    assert r.status_code == 200 and kroger.cart_calls == [[("0001", 1)]]
+
+
+RECEIPT = {"order_number": "112-345", "date": "2026-11-05", "total": 9.99, "savings": 1.0, "fuel_points": 9,
+           "lines": [{"upc": "0001", "name": "KRO WHL MLK", "status": "substituted", "substitute": "Organic Milk",
+                      "quantity": 1, "price": 4.99}]}
+
+
+@pytest.fixture
+def receipt_client(storage, kroger):
+    calls = []
+
+    def reader(text, images, items, *, model, timeout):
+        calls.append({"text": text, "images": [Path(p) for p in images],
+                      "exists": [Path(p).exists() for p in images], "items": items})
+        return reader.answer
+
+    reader.answer = RECEIPT
+    c = TestClient(create_app(storage, kroger, receipt_reader=reader), follow_redirects=False)
+    c.calls, c.reader = calls, reader
+    return c
+
+
+def test_receipt_updates_the_order(receipt_client):
+    order = push_one(receipt_client)
+    r = receipt_client.post(f"/api/orders/{order['id']}/receipt",
+                            json={"text": "Order 112-345 ...", "photos": [{"media_type": "image/png", "data": PNG}]})
+    assert r.status_code == 200
+    out = r.json()["order"]
+    assert out["receipt"]["order_number"] == "112-345" and out["receipt"]["total"] == 9.99
+    assert out["items"][0]["outcome"]["substitute"] == "Organic Milk"
+    (call,) = receipt_client.calls
+    assert call["text"] == "Order 112-345 ..." and call["exists"] == [True]
+    assert call["items"][0]["upc"] == "0001"
+    assert not call["images"][0].exists()   # the screenshot lived only for the request
+    stored = receipt_client.get("/api/orders").json()["orders"][0]
+    assert stored["receipt"]["fuel_points"] == 9
+
+
+def test_receipt_refusals(receipt_client, storage):
+    in_cart_order = push_one(receipt_client, checkout=False)
+    r = receipt_client.post(f"/api/orders/{in_cart_order['id']}/receipt", json={"text": "x"})
+    assert r.json()["error"] == "This order is still in your cart; check out first."
+    order = receipt_client.post("/api/cart/checkout").json()["order"]
+    r = receipt_client.post(f"/api/orders/{order['id']}/receipt", json={"text": "  "})
+    assert r.status_code == 400 and r.json()["error"] == "Paste the receipt or add a screenshot."
+    assert receipt_client.post("/api/orders/nope/receipt", json={"text": "x"}).status_code == 404
+    storage.record_order({"id": "ald", "placed_at": "2026-11-01T00:00:00+00:00", "cart": "aldi", "items": []})
+    assert receipt_client.post("/api/orders/ald/receipt", json={"text": "x"}).json()["error"] == \
+        "Receipts are for Kroger orders."
+    receipt_client.reader.answer = {"lines": []}
+    r = receipt_client.post(f"/api/orders/{order['id']}/receipt", json={"text": "hello"})
+    assert r.status_code == 422 and r.json()["error"] == "Claude couldn't read a receipt in that."
+    assert receipt_client.calls and len(receipt_client.calls) == 1
+
+
+def test_concurrent_checkouts_record_one_order(client):
+    import threading
+    send(client, {**MILK})
+    send(client, {**EGGS})
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(client.post("/api/cart/checkout").status_code))
+               for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == [200, 400, 400, 400]
+    assert len(client.get("/api/orders").json()["orders"]) == 1
+
+
+def test_in_cart_send_cannot_be_deleted(client):
+    order = push_one(client, checkout=False)
+    r = client.delete(f"/api/orders/{order['id']}")
+    assert r.status_code == 400 and "I emptied my cart" in r.json()["error"]
+    assert client.get("/api/cart").json()["orders"] == 1
+
+
+def test_mode_missing_combines_duplicate_rows(client, kroger):
+    send(client, {**MILK, "quantity": 1})
+    kroger.cart_calls.clear()
+    r = send(client, {**MILK, "quantity": 1}, {**MILK, "quantity": 1}, mode="missing")
+    assert r.status_code == 200 and kroger.cart_calls == [[("0001", 1)]]
+
+
+def test_mode_missing_with_empty_cart_sends_everything(client, kroger):
+    assert send(client, {**MILK, "quantity": 2}, mode="missing").status_code == 200
+    assert kroger.cart_calls == [[("0001", 2)]]
+
+
+def test_reorder_sends_without_receipt_outcomes(receipt_client, kroger):
+    order = push_one(receipt_client)
+    receipt_client.post(f"/api/orders/{order['id']}/receipt", json={"text": "r"})
+    r = receipt_client.post(f"/api/orders/{order['id']}/reorder")
+    assert r.status_code == 200
+    assert all("outcome" not in i for i in r.json()["order"]["items"])
+
+
+def test_receipt_on_order_before_v73_and_dropped(receipt_client, storage):
+    storage.record_order({"id": "old", "placed_at": "2026-10-01T00:00:00+00:00",
+                          "items": [{"upc": "0001", "name": "Whole Milk", "quantity": 1}]})
+    assert receipt_client.post("/api/orders/old/receipt", json={"text": "r"}).status_code == 200
+    push_one(receipt_client, checkout=False)
+    receipt_client.post("/api/cart/empty")
+    dropped = next(o for o in receipt_client.get("/api/orders").json()["orders"] if o.get("status") == "dropped")
+    r = receipt_client.post(f"/api/orders/{dropped['id']}/receipt", json={"text": "r"})
+    assert r.json()["error"] == "This send was dropped from your cart."
+
+
+def test_receipt_for_order_deleted_while_reading_is_404(receipt_client, storage, monkeypatch):
+    order = push_one(receipt_client)
+    real_change = storage.change_orders
+
+    def deleted_first(change):   # the order disappears while Claude is reading
+        storage.delete_order(order["id"])
+        return real_change(change)
+
+    monkeypatch.setattr(storage, "change_orders", deleted_first)
+    r = receipt_client.post(f"/api/orders/{order['id']}/receipt", json={"text": "r"})
+    assert r.status_code == 404
+    assert receipt_client.get("/api/orders").json()["orders"] == []
+
+
+def test_receipt_reader_error_keeps_its_status(storage, kroger):
+    from kroger_reorder.vision import VisionError
+
+    def failing(*a, **k):
+        raise VisionError(504, "Claude took longer than 90 seconds; try a shorter paste.")
+
+    c = TestClient(create_app(storage, kroger, receipt_reader=failing))
+    order = push_one(c)
+    r = c.post(f"/api/orders/{order['id']}/receipt", json={"text": "r"})
+    assert r.status_code == 504 and "longer" in r.json()["error"]
+
+
+def test_receipt_rejects_bad_screenshot(receipt_client):
+    order = push_one(receipt_client)
+    r = receipt_client.post(f"/api/orders/{order['id']}/receipt",
+                            json={"photos": [{"media_type": "image/png", "data": "not base64!"}]})
+    assert r.status_code == 400 and receipt_client.calls == []
+
+
+def test_failed_history_write_warns_that_doubling_protection_is_off(client, storage, monkeypatch):
+    def boom(order):
+        raise OSError("disk full")
+    monkeypatch.setattr(storage, "record_order", boom)
+    r = send(client, {**MILK})
+    assert "can't warn before sending them again" in r.json()["warning"]

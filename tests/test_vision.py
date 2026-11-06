@@ -27,10 +27,12 @@ def envelope(result, **over):
 def fake_runner(returncode=0, stdout="", stderr=""):
     calls = []
 
-    def run(args, stdin_text, timeout):
+    def run(args, stdin_text, timeout, cwd=None):
         calls.append((args, stdin_text, timeout))
+        run.cwds.append(cwd)
         return RunResult(returncode, stdout, stderr)
     run.calls = calls
+    run.cwds = []
     return run
 
 
@@ -142,7 +144,7 @@ def test_analyze_non_json_stdout_is_502():
 
 
 def test_analyze_timeout_bubbles_as_504():
-    def slow(args, stdin_text, timeout):
+    def slow(args, stdin_text, timeout, cwd=None):
         raise CliTimeout()
     with pytest.raises(VisionError) as exc:
         analyze(PHOTOS, "", "Weekly", [], "", model="m", timeout=5, runner=slow, which=which_ok)
@@ -306,7 +308,7 @@ def test_complete_cli_with_tools_and_preamble():
 
 
 def test_complete_cli_timeout_uses_callers_wording():
-    def slow(args, stdin_text, timeout):
+    def slow(args, stdin_text, timeout, cwd=None):
         raise CliTimeout()
     with pytest.raises(VisionError) as exc:
         complete("SYS", "USER", wording=WORDING, model="m", timeout=9, runner=slow, which=which_ok)
