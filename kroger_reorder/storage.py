@@ -312,6 +312,21 @@ class Storage:
         with self._lock:
             self._write(ORDERS_FILE, {"orders": [order, *self._load_orders()]})
 
+    def update_order(self, order: dict) -> bool:
+        """Replace the stored order with the same id; False when there is none."""
+        with self._lock:
+            orders = self._load_orders()
+            if not any(o["id"] == order["id"] for o in orders):
+                return False
+            self._write(ORDERS_FILE, {"orders": [order if o["id"] == order["id"] else o for o in orders]})
+            return True
+
+    def replace_orders(self, remove_ids: list[str], add: dict | None) -> None:
+        """Remove some orders and add one, in one write (a checkout merging several sends)."""
+        with self._lock:
+            kept = [o for o in self._load_orders() if o["id"] not in set(remove_ids)]
+            self._write(ORDERS_FILE, {"orders": ([add] if add else []) + kept})
+
     def delete_order(self, order_id: str) -> bool:
         with self._lock:
             orders = self._load_orders()

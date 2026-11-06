@@ -28,13 +28,18 @@ def snapshot_item(item: dict) -> dict:
     }
 
 
+def _estimate(snap: list[dict]) -> float | None:
+    priced = [(i["quantity"], p) for i in snap if (p := _unit_price(i)) is not None]
+    return round(sum(q * p for q, p in priced), 2) if priced else None
+
+
 def build_order(items: list[dict], *, list_slug: str | None, list_name: str | None, store: dict,
-                reorder_of: str | None = None, cart: str = "kroger", now: datetime | None = None) -> dict:
+                reorder_of: str | None = None, cart: str = "kroger", status: str | None = None,
+                now: datetime | None = None) -> dict:
+    """`status` is set on Kroger sends ("in_cart"); an order without one counts as ordered."""
     now = now or datetime.now(timezone.utc)
     snap = [snapshot_item(i) for i in items]
-    priced = [(i["quantity"], p) for i in snap if (p := _unit_price(i)) is not None]
-    total = round(sum(q * p for q, p in priced), 2) if priced else None
-    return {
+    order = {
         "id": f"{now.strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(2)}",
         "placed_at": now.isoformat(timespec="seconds"),
         "list_slug": list_slug,
@@ -44,6 +49,137 @@ def build_order(items: list[dict], *, list_slug: str | None, list_name: str | No
         "reorder_of": reorder_of,
         "cart": cart,
         "items": snap,
-        "estimated_total": total,
+        "estimated_total": _estimate(snap),
         "item_count": len(snap),
     }
+    if status:
+        order["status"] = status
+    return order
+
+
+# -- v7.3: what the app put in the Kroger cart, checkout, receipts ------------------------------
+IN_CART, ORDERED, DROPPED = "in_cart", "ordered", "dropped"
+OUTCOMES = ("received", "substituted", "out_of_stock", "refunded")
+RECEIPT_FIELDS = ("order_number", "date", "total", "savings", "fuel_points")
+
+
+def is_ordered(order: dict) -> bool:
+    """A purchase: checked out, or recorded before v7.3 / on Aldi (no status)."""
+    return order.get("status", ORDERED) == ORDERED
+
+
+def in_cart(orders: list[dict]) -> list[dict]:
+    """Kroger sends not yet checked out or dropped, oldest first."""
+    found = [o for o in orders if o.get("status") == IN_CART and o.get("cart", "kroger") == "kroger"]
+    return sorted(found, key=lambda o: str(o.get("placed_at", "")))
+
+
+def _quantity(item: dict) -> int:
+    try:
+        return max(0, int(item.get("quantity", 1) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _combine(orders: list[dict]) -> list[dict]:
+    by_upc: dict[str, dict] = {}
+    for order in orders:
+        for item in order.get("items", []):
+            if not isinstance(item, dict) or not item.get("upc"):
+                continue
+            upc = str(item["upc"])
+            row = by_upc.get(upc)
+            if row is None:
+                row = by_upc[upc] = {**item, "upc": upc, "quantity": 0, "sent_at": []}
+            row["quantity"] += _quantity(item)
+            if order.get("placed_at") and order["placed_at"] not in row["sent_at"]:
+                row["sent_at"].append(order["placed_at"])
+    return list(by_upc.values())
+
+
+def cart_contents(orders: list[dict]) -> list[dict]:
+    """What this app has put in the Kroger cart since the last checkout, one row per UPC:
+    the snapshot fields plus the summed quantity and `sent_at` (send times, oldest first)."""
+    return _combine(in_cart(orders))
+
+
+def merge_checkout(orders: list[dict], *, now: datetime | None = None) -> tuple[dict | None, list[str]]:
+    """The in-cart sends become one ordered order (one real Kroger order). Returns it and the ids of
+    the orders it replaces; (None, []) when nothing is in the cart. A single send keeps its id."""
+    sends = in_cart(orders)
+    if not sends:
+        return None, []
+    now = now or datetime.now(timezone.utc)
+    stamp = now.isoformat(timespec="seconds")
+    ids = [o["id"] for o in sends]
+    names: list[str] = []
+    for o in sends:
+        if o.get("list_name") and o["list_name"] not in names:
+            names.append(o["list_name"])
+    items = [{k: v for k, v in row.items() if k != "sent_at"} for row in _combine(sends)]
+    first = sends[0]
+    merged = {**first, "placed_at": stamp, "status": ORDERED, "checked_out_at": stamp,
+              "sent_at": [o.get("placed_at") for o in sends], "items": items,
+              "estimated_total": _estimate(items), "item_count": len(items),
+              "list_name": " + ".join(names) or first.get("list_name")}
+    if len(sends) > 1:
+        merged["id"] = f"{now.strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(2)}"
+        merged["merged_from"] = ids
+        if len({o.get("list_slug") for o in sends}) > 1:
+            merged["list_slug"] = None
+        merged["reorder_of"] = None
+    return merged, ids
+
+
+def _number(value) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def apply_receipt(order: dict, parsed: dict, *, now: datetime | None = None) -> dict:
+    """A copy of `order` with what a receipt says: header fields that are present overwrite, and each
+    line whose `upc` is on the order sets that item's `outcome`. Lines that match nothing are kept
+    by name in `receipt.unmatched`. A later paste only changes what it mentions."""
+    now = now or datetime.now(timezone.utc)
+    out = {**order, "items": [dict(i) for i in order.get("items", []) if isinstance(i, dict)]}
+    receipt = dict(order.get("receipt") or {})
+    for field in RECEIPT_FIELDS:
+        value = parsed.get(field)
+        if value is None or value == "":
+            continue
+        if field in ("total", "savings"):
+            value = _number(value)
+        elif field == "fuel_points":
+            value = int(n) if (n := _number(value)) is not None else None
+        else:
+            value = str(value).strip()[:40] or None
+        if value is not None:
+            receipt[field] = value
+    by_upc = {str(i.get("upc")): i for i in out["items"]}
+    unmatched = list(receipt.get("unmatched") or [])
+    for line in parsed.get("lines") or []:
+        if not isinstance(line, dict):
+            continue
+        status = str(line.get("status") or "").lower()
+        target = by_upc.get(str(line.get("upc"))) if line.get("upc") is not None else None
+        if target is None or status not in OUTCOMES:
+            name = str(line.get("name") or "").strip()[:80]
+            if name and name not in unmatched:
+                unmatched.append(name)
+            continue
+        quantity = _number(line.get("quantity"))
+        substitute = str(line.get("substitute") or "").strip()[:80]
+        target["outcome"] = {
+            "status": status,
+            "substitute": substitute or None,
+            "quantity": max(0, int(quantity)) if quantity is not None else None,
+            "price": _number(line.get("price")),
+        }
+    receipt["unmatched"] = unmatched
+    receipt["added_at"] = now.isoformat(timespec="seconds")
+    out["receipt"] = receipt
+    return out

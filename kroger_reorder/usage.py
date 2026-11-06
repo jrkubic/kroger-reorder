@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from .orders import is_ordered
+
 
 def _parse(iso: str | None) -> datetime | None:
     if not iso:
@@ -28,10 +30,17 @@ def usage_profile(orders: list[dict], now: datetime | None = None) -> list[dict]
     now = now or datetime.now(timezone.utc)
     by_upc: dict[str, dict] = {}
     for order in orders:
+        if not is_ordered(order):  # still in the cart, or dropped: not a purchase
+            continue
         when = _parse(order.get("placed_at"))
         for item in order.get("items", []):
             if not isinstance(item, dict) or not item.get("upc"):
                 continue
+            outcome = item.get("outcome") if isinstance(item.get("outcome"), dict) else {}
+            if outcome.get("status") in ("out_of_stock", "refunded"):
+                continue  # a receipt says it never arrived
+            if outcome.get("quantity"):
+                item = {**item, "quantity": outcome["quantity"]}  # what was received, substitutes included
             upc = str(item["upc"])
             row = by_upc.setdefault(upc, {"upc": upc, "name": "", "quantities": [], "dates": []})
             if item.get("name"):
