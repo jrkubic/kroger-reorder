@@ -1,9 +1,10 @@
 # kroger_reorder/stores.py
 """The stores a list can belong to. Kroger has a catalog and a cart API. Aldi has a catalog (read from
-aldi.us, see aldi.py) but no cart. Meijer and Walmart have neither. Every store without a cart is a
+aldi.us, see aldi.py) and, since v7.2, a linked cart: the user's own aldi.us cart, reached through a
+session cookie they paste in. Meijer and Walmart have neither. Every store without a cart is a
 hand-off store: the list is shopped on the store's own site through "Open at <store>", and plain items
 (names with no product) are allowed on it. See docs/plans/2026-11-02-multi-store-design.md and
-docs/plans/2026-11-05-aldi-catalog-design.md."""
+docs/plans/2026-11-05-aldi-catalog-design.md and docs/plans/2026-11-06-aldi-cart-design.md."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -22,13 +23,15 @@ class Provider:
     home_url: str | None = None
     product_url: str | None = None  # "{id}" is replaced by a catalog product id, for Open at <store>
     product_prefix: str = ""        # catalog ids are stored as prefix + digits; Kroger UPCs are bare digits
+    linked_cart: bool = False       # a cart reached through the user's pasted sign-in (Aldi); the list stays
+                                    # a hand-off list: plain items allowed, Open at <store> still offered
 
 
 PROVIDERS: dict[str, Provider] = {p.key: p for p in (
     Provider("kroger", "Kroger", catalog=True, cart=True),
     Provider("aldi", "Aldi", catalog=True, cart=False, search_url="https://www.aldi.us/store/aldi/s?k={term}",
              home_url="https://www.aldi.us/", product_url="https://www.aldi.us/store/aldi/products/{id}",
-             product_prefix="aldi:"),
+             product_prefix="aldi:", linked_cart=True),
     Provider("meijer", "Meijer", catalog=False, cart=False,
              search_url="https://www.meijer.com/shopping/search.html?text={term}", home_url="https://www.meijer.com/"),
     Provider("walmart", "Walmart", catalog=False, cart=False,

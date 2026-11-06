@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .aldi import AldiError
+from .aldi import SID_COOKIE, SIGNED_OUT, AldiError
 from .importer import parse as parse_import
 from .kroger import KrogerError, NotSignedIn
 from .orders import build_order
@@ -42,6 +42,7 @@ PHOTO_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 TRANSPORT_FAILURE_LIMIT = 3  # consecutive status-0 errors before a price refresh gives up
 NO_NAME = "Give the item a name."
 NO_UPC = "Search your store and pick a product."  # a Kroger list only holds catalog products
+CONNECT_ALDI = "Connect your Aldi cart first."
 
 
 def utc_now() -> str:
@@ -56,6 +57,10 @@ class StoreChoice(BaseModel):
 class ListName(BaseModel):
     name: str
     store: str = DEFAULT_STORE  # only read when creating a list
+
+
+class AldiSignIn(BaseModel):
+    sid: str  # the __Host-instacart_sid cookie value from a signed-in aldi.us browser
 
 
 class ActiveChoice(BaseModel):
@@ -208,6 +213,18 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
     def provider_of(loaded: ListLoad) -> Provider:
         return provider(loaded.store)
 
+    def has_linked_cart(p: Provider) -> bool:
+        """A store whose cart is the user's own, reached through a pasted sign-in (Aldi, with a client)."""
+        return p.linked_cart and aldi is not None
+
+    def aldi_account() -> dict | None:
+        """The connected Aldi account as the page may see it: never the cookie itself."""
+        session = storage.load_aldi_session()
+        if not session:
+            return None
+        return {"name": session.get("name") or "", "email": session.get("email") or "",
+                "connected_at": session.get("connected_at")}
+
     def has_catalog(p: Provider) -> bool:
         """A catalog store whose client is available. Aldi without a client behaves as a plain store."""
         return p.catalog and (p.key == KROGER or aldi is not None)
@@ -247,10 +264,11 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         # Whole-token match so "1111041" is not flagged when Kroger rejects "0001111041700".
         return [u for u in upcs if re.search(rf"(?<!\d){re.escape(u)}(?!\d)", exc.message)]
 
-    def record_order(items: list[dict], **meta) -> tuple[dict | None, str | None]:
-        """Save an order after Kroger accepted the cart. The cart is already filled, so a disk
+    def record_order(items: list[dict], *, cart: str = KROGER, **meta) -> tuple[dict | None, str | None]:
+        """Save an order after the store accepted the cart. The cart is already filled, so a disk
         failure here is reported as a warning rather than an error."""
-        order = build_order(items, store=current_store(), **meta)
+        store = current_store() if cart == KROGER else {"store_id": None, "store_name": provider(cart).name}
+        order = build_order(items, store=store, cart=cart, **meta)
         try:
             storage.record_order(order)
         except OSError as exc:
@@ -279,8 +297,9 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         store = {"store_id": config["store_id"], "store_name": config.get("store_name", "")} if config.get("store_id") else None
         return {"store": store, "signed_in": kroger.is_signed_in(), "photo_backend": photo_backend,
                 "public_url": public_url,
-                "stores": [{"key": p.key, "name": p.name, "catalog": has_catalog(p), "cart": p.cart}
-                           for p in PROVIDERS.values()],
+                "stores": [{"key": p.key, "name": p.name, "catalog": has_catalog(p), "cart": p.cart,
+                            "linked_cart": has_linked_cart(p)} for p in PROVIDERS.values()],
+                "aldi_account": aldi_account(),
                 **lists_payload()}
 
     @app.get("/api/stores")
@@ -320,6 +339,36 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         if aldi is None:
             return error(400, "Aldi isn't configured.")
         return {"store": aldi.store()}
+
+    @app.get("/api/aldi/account")
+    def get_aldi_account():
+        return {"account": aldi_account()}
+
+    @app.put("/api/aldi/account")
+    def connect_aldi(body: AldiSignIn):
+        if aldi is None:
+            return error(400, "Aldi isn't configured.")
+        # Accept the bare value, or a pasted "name=value;" pair, with or without quotes.
+        sid = body.sid.strip().strip(";").strip()
+        if sid.startswith(SID_COOKIE + "="):
+            sid = sid[len(SID_COOKIE) + 1:]
+        sid = sid.strip().strip('"').strip("'").strip()
+        if not sid:
+            return error(400, f"Paste the {SID_COOKIE} cookie value.")
+        try:
+            who = aldi.account(sid)
+        except AldiError as exc:
+            if exc.message != SIGNED_OUT:
+                raise
+            return error(400, "That cookie isn't signed in to aldi.us. Log in at aldi.us first, then copy it again.")
+        storage.save_aldi_session({"sid": sid, "name": who.get("name") or "", "email": who.get("email") or "",
+                                   "connected_at": utc_now()})
+        return {"account": aldi_account()}
+
+    @app.delete("/api/aldi/account", status_code=204)
+    def disconnect_aldi():
+        storage.clear_aldi_session()
+        return Response(status_code=204)
 
     # -- lists ------------------------------------------------------------------------------
     @app.post("/api/lists")
@@ -489,10 +538,46 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         storage.save_list(slug, current.name, current.items)
         return list_payload(get_list(slug), failed=len(set(wanted)) - len(set(wanted) & set(fresh_by_upc)))
 
+    def send_to_aldi(items: list[dict], **meta) -> JSONResponse | dict:
+        """Put Aldi products (dicts with upc, quantity, and the snapshot fields) in the connected
+        cart and record the order. The caller has checked a session exists."""
+        session = storage.load_aldi_session()
+        try:
+            result = aldi.fill_cart(session["sid"], [(i["upc"], int(i["quantity"])) for i in items])
+        except AldiError as exc:
+            if exc.message != SIGNED_OUT:
+                raise
+            storage.clear_aldi_session()   # dead: the page shows Connect again
+            return error(401, SIGNED_OUT, aldi_signed_in=False)
+        added = [i for i in items if i["upc"] in set(result.added)]
+        if not added:
+            return error(502, "Aldi wouldn't add any of these items.", bad_upcs=result.rejected)
+        order, warning = record_order(added, cart="aldi", **meta)
+        return {"added": added, "bad_upcs": result.rejected, "order": order, "warning": warning}
+
+    def push_aldi(slug: str, loaded: ListLoad, models: list[ItemModel]):
+        if not storage.load_aldi_session():
+            return error(400, CONNECT_ALDI)   # before the body is saved, as for a refused push
+        items = [Item(**m.model_dump()) for m in models]
+        if models:
+            storage.save_list(slug, loaded.name, items)
+        chosen = [i for i in items if i.included and i.quantity > 0]
+        if not chosen:
+            return error(400, "Nothing is checked to send.")
+        products = [i for i in chosen if is_product("aldi", i.upc)]
+        if not products:
+            return error(400, "Nothing checked is an Aldi product; use Open at Aldi for items added as typed.")
+        sent = send_to_aldi([asdict(i) for i in products], list_slug=slug, list_name=loaded.name)
+        if isinstance(sent, dict):
+            sent["skipped"] = [i.name for i in chosen if not is_product("aldi", i.upc)]
+        return sent
+
     @app.post("/api/lists/{slug}/push")
     def push(slug: str, models: list[ItemModel]):
         loaded = get_list(slug)
         p = provider_of(loaded)
+        if has_linked_cart(p):
+            return push_aldi(slug, loaded, models)
         if not p.cart:
             return hand_off_refused(p)  # before the body is saved: nothing changes on a refused push
         items = [Item(**m.model_dump()) for m in models]
@@ -547,6 +632,13 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
                  if isinstance(i, dict) and i.get("upc") and int(i.get("quantity", 0) or 0) > 0]
         if not items:
             return error(400, "Nothing to send.")
+        if source.get("cart") == "aldi":
+            if aldi is None:
+                return error(400, "Aldi isn't configured.")
+            if not storage.load_aldi_session():
+                return error(400, CONNECT_ALDI)
+            return send_to_aldi([{**i, "upc": str(i["upc"])} for i in items], list_slug=source.get("list_slug"),
+                                list_name=source.get("list_name"), reorder_of=order_id)
         try:
             kroger.add_to_cart([(str(i["upc"]), int(i["quantity"])) for i in items])
         except NotSignedIn:

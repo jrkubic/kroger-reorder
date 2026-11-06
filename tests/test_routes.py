@@ -6,7 +6,7 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from kroger_reorder.aldi import CHANGED, AldiError
+from kroger_reorder.aldi import CHANGED, SIGNED_OUT, AldiError, CartResult
 from kroger_reorder.kroger import KrogerError, NotSignedIn
 from kroger_reorder.main import create_app
 from kroger_reorder.recipe import Extracted, Page, RecipeError
@@ -98,10 +98,11 @@ def test_initial_state_has_default_list(client):
         "active_list": "standard",
         "photo_backend": None, "public_url": "http://localhost:8000",
         # No Aldi client in this app: Aldi lists are plain until one is configured.
-        "stores": [{"key": "kroger", "name": "Kroger", "catalog": True, "cart": True},
-                   {"key": "aldi", "name": "Aldi", "catalog": False, "cart": False},
-                   {"key": "meijer", "name": "Meijer", "catalog": False, "cart": False},
-                   {"key": "walmart", "name": "Walmart", "catalog": False, "cart": False}],
+        "stores": [{"key": "kroger", "name": "Kroger", "catalog": True, "cart": True, "linked_cart": False},
+                   {"key": "aldi", "name": "Aldi", "catalog": False, "cart": False, "linked_cart": False},
+                   {"key": "meijer", "name": "Meijer", "catalog": False, "cart": False, "linked_cart": False},
+                   {"key": "walmart", "name": "Walmart", "catalog": False, "cart": False, "linked_cart": False}],
+        "aldi_account": None,
     }
 
 
@@ -322,6 +323,10 @@ class FakeAldi:
     def __init__(self):
         self.error: Exception | None = None
         self.searches, self.lookups = [], []
+        self.accounts = {"v2.good": {"name": "Pat", "email": "pat@example.com"}}   # sid -> account
+        self.cart_calls = []                 # (sid, [(upc, quantity)])
+        self.unknown = set()                 # upcs fill_cart rejects
+        self.cart_error: Exception | None = None
         self.catalog = {"aldi:16902710": aldi_product("aldi:16902710", "Whole Milk"),
                         "aldi:20957684": aldi_product("aldi:20957684", "2% Milk", price=2.85, promo=2.49)}
 
@@ -343,6 +348,20 @@ class FakeAldi:
         self._check()
         return {"store_id": "24032", "store_name": "ALDI - SPR 20 - Marysville", "address": "15740 US-36 E"}
 
+    def account(self, sid):
+        if sid not in self.accounts:
+            raise AldiError(401, SIGNED_OUT)
+        return self.accounts[sid]
+
+    def fill_cart(self, sid, wanted):
+        self.cart_calls.append((sid, list(wanted)))
+        if self.cart_error:
+            raise self.cart_error
+        if sid not in self.accounts:
+            raise AldiError(401, SIGNED_OUT)
+        upcs = [u for u, _ in wanted]
+        return CartResult(added=[u for u in upcs if u not in self.unknown], rejected=[u for u in upcs if u in self.unknown])
+
 
 @pytest.fixture
 def fake_aldi():
@@ -361,7 +380,14 @@ def aldi_list(aldi_client):
 
 def test_state_reports_aldi_catalog_when_configured(aldi_client):
     stores = {s["key"]: s for s in aldi_client.get("/api/state").json()["stores"]}
-    assert stores["aldi"] == {"key": "aldi", "name": "Aldi", "catalog": True, "cart": False}
+    assert stores["aldi"] == {"key": "aldi", "name": "Aldi", "catalog": True, "cart": False, "linked_cart": True}
+    assert stores["kroger"]["linked_cart"] is False
+    assert aldi_client.get("/api/state").json()["aldi_account"] is None
+
+
+def test_state_without_an_aldi_client_has_no_linked_cart(client):
+    stores = {s["key"]: s for s in client.get("/api/state").json()["stores"]}
+    assert stores["aldi"]["linked_cart"] is False
 
 
 def test_search_by_store_needs_no_kroger_store(aldi_client, fake_aldi):
@@ -454,12 +480,10 @@ def test_aldi_resolve_stops_early_once_the_site_is_down(aldi_client, fake_aldi):
     assert len(fake_aldi.searches) <= 4   # at most one wave of the thread pool; the rest skip
 
 
-def test_aldi_list_has_no_cart_and_hands_off_with_product_pages(aldi_client, aldi_list, kroger):
+def test_aldi_list_hands_off_with_product_pages(aldi_client, aldi_list, kroger):
     kroger.signed_in = True
     aldi_client.put(f"/api/lists/{aldi_list}/items", json=[
         {"upc": "aldi:16902710", "name": "Whole Milk"}, {"upc": "candles", "name": "Candles"}])
-    r = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[])
-    assert r.status_code == 400 and r.json()["error"] == "This list is for Aldi; use Open at Aldi instead."
     urls = [i["url"] for i in aldi_client.get(f"/api/lists/{aldi_list}/handoff").json()["items"]]
     assert urls == ["https://www.aldi.us/store/aldi/products/16902710", "https://www.aldi.us/store/aldi/s?k=Candles"]
 
@@ -1056,3 +1080,134 @@ def test_recipe_suggest_with_no_suggestions_is_422(storage, kroger):
                                    recipe_suggester=lambda *a, **k: []))
     r = client.post("/api/recipe/suggest", json={"url": "https://site.test/r", "slug": "standard"})
     assert r.status_code == 422 and r.json()["error"] == "Claude couldn't find any ingredients on that page."
+
+
+# -- the Aldi cart (v7.2) ---------------------------------------------------------------------
+
+@pytest.fixture
+def connected(aldi_client):
+    r = aldi_client.put("/api/aldi/account", json={"sid": "v2.good"})
+    assert r.status_code == 200
+    return r.json()["account"]
+
+
+def test_connect_aldi_account_stores_the_cookie_but_never_shows_it(aldi_client, storage, connected):
+    assert connected["name"] == "Pat" and connected["email"] == "pat@example.com" and connected["connected_at"]
+    assert "sid" not in connected
+    assert storage.load_aldi_session()["sid"] == "v2.good"
+    assert aldi_client.get("/api/aldi/account").json()["account"] == connected
+    state = aldi_client.get("/api/state").json()
+    assert state["aldi_account"] == connected and "v2.good" not in json.dumps(state)
+
+
+@pytest.mark.parametrize("pasted", ['  "v2.good"  ', "__Host-instacart_sid=v2.good", "__Host-instacart_sid=v2.good;"])
+def test_connect_tolerates_a_pasted_name_quotes_and_semicolon(aldi_client, storage, pasted):
+    assert aldi_client.put("/api/aldi/account", json={"sid": pasted}).status_code == 200
+    assert storage.load_aldi_session()["sid"] == "v2.good"
+
+
+def test_connect_rejects_empty_and_guest_cookies(aldi_client, storage):
+    r = aldi_client.put("/api/aldi/account", json={"sid": "  "})
+    assert r.status_code == 400 and r.json()["error"] == "Paste the __Host-instacart_sid cookie value."
+    r = aldi_client.put("/api/aldi/account", json={"sid": "v2.guest"})
+    assert r.status_code == 400
+    assert r.json()["error"] == "That cookie isn't signed in to aldi.us. Log in at aldi.us first, then copy it again."
+    assert storage.load_aldi_session() is None
+
+
+def test_connect_without_an_aldi_client(client):
+    r = client.put("/api/aldi/account", json={"sid": "v2.good"})
+    assert r.status_code == 400 and r.json()["error"] == "Aldi isn't configured."
+
+
+def test_disconnect_forgets_the_cookie(aldi_client, storage, connected):
+    assert aldi_client.delete("/api/aldi/account").status_code == 204
+    assert storage.load_aldi_session() is None
+    assert aldi_client.get("/api/aldi/account").json()["account"] is None
+
+
+MILK_ALDI = {"upc": "aldi:16902710", "name": "Whole Milk", "size": "1 gal", "price": 2.57, "quantity": 2}
+EGGS_ALDI = {"upc": "aldi:20957684", "name": "Eggs", "size": "12 ct", "price": 1.99}
+CANDLES = {"upc": "candles", "name": "Candles", "size": ""}
+
+
+def test_push_aldi_needs_a_connected_cart_and_changes_nothing_without_one(aldi_client, aldi_list, fake_aldi):
+    r = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[MILK_ALDI])
+    assert r.status_code == 400 and r.json()["error"] == "Connect your Aldi cart first."
+    assert aldi_client.get(f"/api/lists/{aldi_list}").json()["items"] == [] and fake_aldi.cart_calls == []
+
+
+def test_push_aldi_sends_checked_products_and_skips_plain_items(aldi_client, aldi_list, fake_aldi, storage, connected):
+    body = [MILK_ALDI, {**EGGS_ALDI, "included": False}, CANDLES]
+    r = aldi_client.post(f"/api/lists/{aldi_list}/push", json=body)
+    assert r.status_code == 200
+    assert fake_aldi.cart_calls == [("v2.good", [("aldi:16902710", 2)])]
+    data = r.json()
+    assert [i["upc"] for i in data["added"]] == ["aldi:16902710"]
+    assert data["skipped"] == ["Candles"] and data["bad_upcs"] == []
+    assert [i.upc for i in storage.load_list(aldi_list).items] == ["aldi:16902710", "aldi:20957684", "candles"]
+    order = data["order"]
+    assert order["cart"] == "aldi" and order["store_name"] == "Aldi" and order["estimated_total"] == 5.14
+    assert [o["id"] for o in storage.list_orders()] == [order["id"]]
+
+
+def test_push_aldi_with_only_plain_items_checked(aldi_client, aldi_list, fake_aldi, connected):
+    r = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[CANDLES])
+    assert r.status_code == 400
+    assert r.json()["error"] == "Nothing checked is an Aldi product; use Open at Aldi for items added as typed."
+    r = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[{**MILK_ALDI, "included": False}])
+    assert r.status_code == 400 and r.json()["error"] == "Nothing is checked to send."
+    assert fake_aldi.cart_calls == []
+
+
+def test_push_aldi_reports_rejected_products(aldi_client, aldi_list, fake_aldi, storage, connected):
+    fake_aldi.unknown = {"aldi:20957684"}
+    r = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[MILK_ALDI, EGGS_ALDI])
+    assert r.status_code == 200
+    assert [i["upc"] for i in r.json()["added"]] == ["aldi:16902710"] and r.json()["bad_upcs"] == ["aldi:20957684"]
+    assert [i["upc"] for i in storage.list_orders()[0]["items"]] == ["aldi:16902710"]
+    fake_aldi.unknown = {"aldi:16902710"}
+    r = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[MILK_ALDI])
+    assert r.status_code == 502
+    assert r.json() == {"error": "Aldi wouldn't add any of these items.", "bad_upcs": ["aldi:16902710"]}
+    assert len(storage.list_orders()) == 1
+
+
+def test_push_aldi_signed_out_forgets_the_cookie(aldi_client, aldi_list, fake_aldi, storage, connected):
+    fake_aldi.accounts.clear()
+    r = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[MILK_ALDI])
+    assert r.status_code == 401 and r.json() == {"error": SIGNED_OUT, "aldi_signed_in": False}
+    assert storage.load_aldi_session() is None and storage.list_orders() == []
+
+
+def test_push_aldi_site_errors_are_502(aldi_client, aldi_list, fake_aldi, connected):
+    fake_aldi.cart_error = AldiError(502, CHANGED)
+    r = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[MILK_ALDI])
+    assert r.status_code == 502 and r.json()["error"] == CHANGED
+
+
+def test_push_on_meijer_is_still_refused(aldi_client, connected):
+    slug = aldi_client.post("/api/lists", json={"name": "Meijer run", "store": "meijer"}).json()["slug"]
+    r = aldi_client.post(f"/api/lists/{slug}/push", json=[CANDLES])
+    assert r.status_code == 400 and r.json()["error"] == "This list is for Meijer; use Open at Meijer instead."
+
+
+def test_push_aldi_without_an_aldi_client_is_refused(client, aldi):
+    r = client.post(f"/api/lists/{aldi}/push", json=[MILK_ALDI])
+    assert r.status_code == 400 and r.json()["error"] == "This list is for Aldi; use Open at Aldi instead."
+
+
+def test_reorder_an_aldi_order_goes_to_the_aldi_cart(aldi_client, aldi_list, fake_aldi, kroger, connected):
+    source = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[MILK_ALDI]).json()["order"]
+    r = aldi_client.post(f"/api/orders/{source['id']}/reorder")
+    assert r.status_code == 200
+    assert fake_aldi.cart_calls[-1] == ("v2.good", [("aldi:16902710", 2)]) and kroger.cart_calls == []
+    assert r.json()["order"]["cart"] == "aldi" and r.json()["order"]["reorder_of"] == source["id"]
+    aldi_client.delete("/api/aldi/account")
+    r = aldi_client.post(f"/api/orders/{source['id']}/reorder")
+    assert r.status_code == 400 and r.json()["error"] == "Connect your Aldi cart first."
+
+
+def test_kroger_orders_say_so(client, kroger):
+    r = client.post("/api/lists/standard/push", json=[{**MILK, **FULL}])
+    assert r.json()["order"]["cart"] == "kroger"

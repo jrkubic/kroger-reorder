@@ -1,5 +1,6 @@
 # kroger_reorder/orders.py
-"""Order snapshots: what was sent to the Kroger cart, recorded after Kroger accepted it."""
+"""Order snapshots: what was sent to a cart (Kroger's, or since v7.2 the user's Aldi cart), recorded
+after the store accepted it. Orders without a "cart" field predate v7.2 and are Kroger orders."""
 from __future__ import annotations
 
 import secrets
@@ -28,7 +29,7 @@ def snapshot_item(item: dict) -> dict:
 
 
 def build_order(items: list[dict], *, list_slug: str | None, list_name: str | None, store: dict,
-                reorder_of: str | None = None, now: datetime | None = None) -> dict:
+                reorder_of: str | None = None, cart: str = "kroger", now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     snap = [snapshot_item(i) for i in items]
     priced = [(i["quantity"], p) for i in snap if (p := _unit_price(i)) is not None]
@@ -41,6 +42,7 @@ def build_order(items: list[dict], *, list_slug: str | None, list_name: str | No
         "store_id": store.get("store_id"),
         "store_name": store.get("store_name"),
         "reorder_of": reorder_of,
+        "cart": cart,
         "items": snap,
         "estimated_total": total,
         "item_count": len(snap),
