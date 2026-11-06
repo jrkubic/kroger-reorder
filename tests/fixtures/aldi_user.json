@@ -1,0 +1,1 @@
+{"data":{"currentUser":{"id":"1000000000000001","firstName":"Pat","lastName":"Shopper","guest":false,"email":"pat@example.com","userLifecycle":{"status":"new","__typename":"UsersUserLifecycle"},"__typename":"UsersUser"}}}

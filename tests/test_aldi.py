@@ -8,14 +8,19 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 
-from kroger_reorder.aldi import (CHANGED, ITEMS_HASH, SEARCH_HASH, SESSION_MAX_AGE, AldiClient, AldiError,
-                                 Context, is_product, parse_price)
+from kroger_reorder.aldi import (CHANGED, ITEMS_HASH, SEARCH_HASH, SESSION_MAX_AGE, SID_COOKIE, SIGNED_OUT,
+                                 UPDATE_CART_HASH, AldiClient, AldiError, Context, is_product, parse_price)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PAGE = (FIXTURES / "aldi_page.html").read_text(encoding="utf-8")
 SEARCH = json.loads((FIXTURES / "aldi_search.json").read_text(encoding="utf-8"))
 ITEMS = json.loads((FIXTURES / "aldi_items.json").read_text(encoding="utf-8"))
 LOCATION = json.loads((FIXTURES / "aldi_location.json").read_text(encoding="utf-8"))
+USER = json.loads((FIXTURES / "aldi_user.json").read_text(encoding="utf-8"))
+ACTIVE_CART = json.loads((FIXTURES / "aldi_active_cart.json").read_text(encoding="utf-8"))
+CART = json.loads((FIXTURES / "aldi_cart.json").read_text(encoding="utf-8"))
+UPDATE = json.loads((FIXTURES / "aldi_update.json").read_text(encoding="utf-8"))
+UPDATE_ERROR = json.loads((FIXTURES / "aldi_update_error.json").read_text(encoding="utf-8"))
 NOT_SUPPORTED = {"errors": [{"message": "PersistedQueryNotSupported",
                              "extensions": {"code": "PERSISTED_QUERY_NOT_SUPPORTED"}}], "data": None}
 
@@ -28,12 +33,20 @@ class FakeSite:
         self.items = copy.deepcopy(ITEMS)
         self.search = copy.deepcopy(SEARCH)
         self.overrides = {}      # operationName or "page" -> list of httpx.Response or Exception, consumed in order
+        self.user = copy.deepcopy(USER)
+        self.cart = copy.deepcopy(CART)
+        self.unknown = set()     # item ids the cart mutation does not know ("items_<loc>-<pid>")
+        self.cookies = []        # (op, Cookie header) per request
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         url = urlsplit(str(request.url))
         query = {k: v[0] for k, v in parse_qs(url.query).items()}
         op = "page" if url.path == "/store/aldi/s" else query.get("operationName", "?")
+        if request.method == "POST":   # mutations carry variables and extensions in a JSON body
+            body = json.loads(request.content)
+            query.update(variables=json.dumps(body["variables"]), extensions=json.dumps(body["extensions"]))
         self.calls.append((op, query))
+        self.cookies.append((op, request.headers.get("cookie", "")))
         queued = self.overrides.get(op)
         if queued:
             answer = queued.pop(0)
@@ -50,6 +63,22 @@ class FakeSite:
             return httpx.Response(200, json={"data": {"items": [by_id[i] for i in wanted if i in by_id]}})
         if op == "GetRetailerLocationAddress":
             return httpx.Response(200, json=LOCATION)
+        if op == "LandingCurrentUser":
+            return httpx.Response(200, json=self.user)
+        if op == "ActiveCartId":
+            return httpx.Response(200, json=ACTIVE_CART)
+        if op == "CartData":
+            return httpx.Response(200, json=self.cart)
+        if op == "UpdateCartItemsMutation":
+            asked = [u["itemId"] for u in json.loads(query["variables"])["cartItemUpdates"]]
+            known = [i for i in asked if i not in self.unknown]
+            if not known:
+                return httpx.Response(200, json=UPDATE_ERROR)
+            answer = copy.deepcopy(UPDATE)
+            answer["data"]["updateCartItems"]["updatedItemIds"] = [
+                {"cartItemUpdatePostUpdateAction": None, "itemId": i, "__typename": "CartsCartItemUpdateResult"}
+                for i in known]
+            return httpx.Response(200, json=answer)
         return httpx.Response(404, json={})
 
     def ops(self):
@@ -249,3 +278,88 @@ def test_hash_overrides(site):
     assert json.loads(site.last("SearchResultsPlacements")["extensions"])["persistedQuery"]["sha256Hash"] == "a" * 64
     assert json.loads(site.last("Items")["extensions"])["persistedQuery"]["sha256Hash"] == "b" * 64
     assert SEARCH_HASH != "a" * 64
+
+
+# -- the signed-in cart ---------------------------------------------------------------------------
+SID = "v2.test.cookie"
+
+
+def updates(site):
+    """Each UpdateCartItemsMutation's {itemId: quantity}, in order."""
+    return [{u["itemId"]: u["quantity"] for u in json.loads(q["variables"])["cartItemUpdates"]}
+            for o, q in site.calls if o == "UpdateCartItemsMutation"]
+
+
+def test_account_reads_the_signed_in_user(client, site):
+    assert client.account(SID) == {"name": "Pat", "email": "pat@example.com"}
+    op, cookie = site.cookies[-1]
+    assert op == "LandingCurrentUser" and f"{SID_COOKIE}={SID}" in cookie
+
+
+@pytest.mark.parametrize("user", [{"guest": True, "firstName": None}, None])
+def test_a_guest_or_missing_user_is_signed_out(client, site, user):
+    site.user["data"]["currentUser"] = user
+    with pytest.raises(AldiError) as exc:
+        client.account(SID)
+    assert (exc.value.status, exc.value.message) == (401, SIGNED_OUT) and not exc.value.unavailable
+
+
+def test_fill_cart_sets_each_product_to_at_least_the_wanted_quantity(client, site):
+    # The cart already holds 2 bananas (fixture); the list wants 1 banana and 3 strawberries.
+    result = client.fill_cart(SID, [("aldi:25720157", 1), ("aldi:16383764", 3)])
+    assert updates(site) == [{"items_24032-25720157": 2.0, "items_24032-16383764": 3.0}]
+    assert (result.added, result.rejected) == (["aldi:25720157", "aldi:16383764"], [])
+    mutation = [q for o, q in site.calls if o == "UpdateCartItemsMutation"][0]
+    assert json.loads(mutation["variables"])["cartId"] == "20000000001"
+    assert json.loads(mutation["extensions"])["persistedQuery"]["sha256Hash"] == UPDATE_CART_HASH
+    assert all(f"{SID_COOKIE}={SID}" in cookie for _, cookie in site.cookies)
+    # The cart is looked up in the shop the signed-in page names, not the anonymous catalog session's.
+    assert json.loads(site.last("ActiveCartId")["variables"]) == {"addressId": None, "shopId": "48408"}
+
+
+def test_fill_cart_does_not_disturb_the_catalog_session(client, site):
+    client.search_products("milk")
+    client.fill_cart(SID, [("aldi:25720157", 1)])
+    client.search_products("milk")
+    assert site.ops().count("page") == 2          # one for the catalog, one for the cart; none renewed
+    assert SID_COOKIE not in site.cookies[-1][1]  # the catalog never carries the sign-in
+
+
+def test_fill_cart_reports_products_the_cart_left_out(client, site):
+    site.unknown = {"items_24032-16383764"}
+    result = client.fill_cart(SID, [("aldi:25720157", 1), ("aldi:16383764", 3)])
+    assert (result.added, result.rejected) == (["aldi:25720157"], ["aldi:16383764"])
+
+
+def test_a_lone_unknown_product_is_rejected(client, site):
+    site.unknown = {"items_24032-999"}
+    result = client.fill_cart(SID, [("aldi:999", 1)])
+    assert (result.added, result.rejected) == ([], ["aldi:999"])
+
+
+def test_a_batch_error_is_retried_item_by_item(client, site):
+    site.overrides["UpdateCartItemsMutation"] = [httpx.Response(200, json=UPDATE_ERROR)]
+    site.unknown = {"items_24032-999"}
+    result = client.fill_cart(SID, [("aldi:25720157", 1), ("aldi:999", 1)])
+    assert (result.added, result.rejected) == (["aldi:25720157"], ["aldi:999"])
+    assert len(updates(site)) == 3
+
+
+def test_fill_cart_sends_only_aldi_products(client, site):
+    assert client.fill_cart(SID, [("0001111041700", 1), ("bananas", 2), ("aldi:5", 0)]).added == []
+    assert site.calls == []
+
+
+def test_fill_cart_when_signed_out_changes_nothing(client, site):
+    site.user["data"]["currentUser"]["guest"] = True
+    with pytest.raises(AldiError) as exc:
+        client.fill_cart(SID, [("aldi:25720157", 1)])
+    assert exc.value.message == SIGNED_OUT
+    assert "UpdateCartItemsMutation" not in site.ops()
+
+
+def test_fill_cart_on_a_changed_site(client, site):
+    site.overrides["UpdateCartItemsMutation"] = [httpx.Response(400, json=NOT_SUPPORTED)]
+    with pytest.raises(AldiError) as exc:
+        client.fill_cart(SID, [("aldi:25720157", 1)])
+    assert exc.value.message == CHANGED
