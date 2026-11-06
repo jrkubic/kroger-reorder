@@ -8,7 +8,8 @@ let state = { store: null, signed_in: false, lists: [], active_list: null, name:
               photo_backend: null, public_url: null,
               stores: [],            // [{key, name, catalog, cart}] from /api/state: the stores a list can belong to
               store_key: 'kroger',   // the active list's store
-              aldi_store: null };    // {store_name, address} or {error}, fetched once for Aldi lists
+              aldi_store: null,      // {store_name, address} or {error}, fetched once for Aldi lists
+              aldi_account: null };  // {name, email, connected_at} once an aldi.us sign-in is pasted in
 let importRows = [];  // [{raw, name, quantity, candidates, kind?, reason?, group?}]  (kind/reason/group only from Photo and Recipe)
 let orders = [];        // from GET /api/orders, newest first
 let openOrderId = null; // which order row is expanded
@@ -61,6 +62,8 @@ function providerOf(key) {
 // Three kinds of list: Kroger (catalog and cart), Aldi (catalog, shopped on aldi.us), and plain
 // (Meijer, Walmart: names only). Every list without a cart is a hand-off list with Open at <store>.
 function isHandOff() { return !!state.active_list && !providerOf(state.store_key).cart; }
+// Aldi (v7.2): the user's own aldi.us cart, through a pasted sign-in. The list stays a hand-off list.
+function linkedCart() { return !!state.active_list && !!providerOf(state.store_key).linked_cart; }
 function hasCatalog() { return !!state.active_list && providerOf(state.store_key).catalog; }
 function isKroger() { return state.store_key === 'kroger'; }
 // A product from the active list's catalog: Kroger UPCs are digits, Aldi's are "aldi:" + digits.
@@ -140,6 +143,7 @@ function render() {
   $('price-row').classList.toggle('hidden', !catalog);
   $('handoff-line').classList.toggle('hidden', !handOff);
   $('handoff-line').textContent = !handOff ? ''
+    : linkedCart() ? `This list is for ${store.name}: search its catalog above, or add anything by name. Tick what you need, then Send to ${store.name} cart; items added as typed are shopped with Open at ${store.name}.`
     : catalog ? `This list is for ${store.name}: search its catalog above, or add anything by name. Tick what you need, then Open at ${store.name}.`
     : `This list is for ${store.name}: items are plain names. Tick what you need, then Open at ${store.name}.`;
   if (catalog && !isKroger() && !state.aldi_store) loadAldiStore();
@@ -148,7 +152,16 @@ function render() {
   $('open-store').classList.toggle('hidden', !handOff);
   $('open-store').textContent = `Open at ${store.name}`;
   $('open-store').disabled = !anyChecked;
-  $('footer-note').textContent = handOff ? 'Checked items are the ones you will shop for.' : 'Start from an empty Kroger cart, or quantities will double.';
+  const linked = linkedCart();
+  const account = state.aldi_account;
+  $('open-store').classList.toggle('secondary', linked);
+  $('send-aldi').classList.toggle('hidden', !linked);
+  $('send-aldi').textContent = account ? `Send to ${store.name} cart` : `Connect ${store.name} cart\u2026`;
+  $('send-aldi').disabled = !!account && !anyChecked;
+  $('aldi-account-line').classList.toggle('hidden', !(linked && account));
+  $('aldi-account-label').textContent = account ? `${store.name} cart: ${account.name || account.email}` : '';
+  $('footer-note').textContent = linked && account ? `Sending sets each ${store.name} product to at least the list's quantity; it never doubles.`
+    : handOff ? 'Checked items are the ones you will shop for.' : 'Start from an empty Kroger cart, or quantities will double.';
   $('empty').textContent = catalog ? 'Nothing in this list yet. Search above to add items, or click Import.'
                                    : 'Nothing in this list yet. Type an item above and press Add, or click Import.';
   $('check-prices').disabled = !canPrice();
@@ -203,7 +216,8 @@ function adoptList(data) {
 async function refreshLists() {
   const s = await api('GET', '/api/state');
   Object.assign(state, { store: s.store, signed_in: s.signed_in, lists: s.lists, active_list: s.active_list,
-                         photo_backend: s.photo_backend, public_url: s.public_url, stores: s.stores || [] });
+                         photo_backend: s.photo_backend, public_url: s.public_url, stores: s.stores || [],
+                         aldi_account: s.aldi_account || null });
 }
 
 async function loadList() {
@@ -446,6 +460,68 @@ async function openHandoff() {
 }
 
 $('open-store').onclick = openHandoff;
+
+// -- the Aldi cart (v7.2) -------------------------------------------------------------------
+
+function openAldiDialog() {
+  const account = state.aldi_account;
+  $('aldi-title').textContent = account ? 'Your Aldi cart' : 'Connect your Aldi cart';
+  $('aldi-connected').classList.toggle('hidden', !account);
+  $('aldi-connected').textContent = account
+    ? `Connected as ${account.name || account.email}${account.email && account.name ? ` (${account.email})` : ''} since ${ago(account.connected_at)}. Paste a new value below to replace it.` : '';
+  $('aldi-disconnect').classList.toggle('hidden', !account);
+  $('aldi-sid').value = '';
+  banner(null, '', false, $('aldi-banner'));
+  $('aldi-dialog').showModal();
+  $('aldi-sid').focus();
+}
+
+$('aldi-account').onclick = openAldiDialog;
+$('aldi-close').onclick = () => $('aldi-dialog').close();
+$('aldi-form').onsubmit = async (e) => {
+  e.preventDefault();
+  $('aldi-save').disabled = true;
+  try {
+    state.aldi_account = (await api('PUT', '/api/aldi/account', { sid: $('aldi-sid').value })).account;
+    $('aldi-sid').value = '';   // a sign-in: don't leave it sitting in the page
+    $('aldi-dialog').close();
+    banner('ok', `Aldi cart connected as ${state.aldi_account.name || state.aldi_account.email}.`);
+    render();
+  } catch (err) { banner('error', err.message, false, $('aldi-banner')); }
+  finally { $('aldi-save').disabled = false; }
+};
+$('aldi-disconnect').onclick = async () => {
+  try {
+    await api('DELETE', '/api/aldi/account');
+    state.aldi_account = null;
+    $('aldi-dialog').close();
+    banner('ok', 'Aldi cart disconnected. The sign-in was deleted from this app; it still works in your browser.');
+    render();
+  } catch (err) { banner('error', err.message, false, $('aldi-banner')); }
+};
+
+$('send-aldi').onclick = async () => {
+  if (!state.aldi_account) { openAldiDialog(); return; }
+  banner();
+  $('send-aldi').disabled = true;
+  try {
+    const { added, skipped, bad_upcs, warning } = await api('POST', listPath('/push'), cleanItems());
+    const bad = bad_upcs || [];
+    state.items.forEach(i => { i.bad = bad.includes(i.upc); });
+    let text = `Added to your Aldi cart: ${added.map(i => esc(i.name)).join(', ')}. ` +
+      `Finish checkout at <a href="https://www.aldi.us/store/aldi/storefront" target="_blank" rel="noopener">aldi.us</a>.`;
+    if (skipped && skipped.length) text += ` Not sent, since they aren't Aldi products: ${skipped.map(esc).join(', ')}; use Open at Aldi for those.`;
+    if (bad.length) text += ` Aldi wouldn't take the highlighted item${bad.length === 1 ? '' : 's'}; it may be sold out.`;
+    if (warning) text += ` ${esc(warning)}`;
+    banner(bad.length || warning ? 'warn' : 'ok', text, true);
+  } catch (e) {
+    if (e.data && e.data.aldi_signed_in === false) state.aldi_account = null;
+    const bad = (e.data && e.data.bad_upcs) || [];
+    state.items.forEach(i => { i.bad = bad.includes(i.upc); });
+    banner('error', e.message + (bad.length ? ' The highlighted items were rejected; they may be sold out.' : ''));
+  }
+  render();
+};
 $('handoff-close').onclick = () => $('handoff-dialog').close();
 $('handoff-copy').onclick = async () => {
   try {
@@ -882,14 +958,15 @@ function renderOrders() {
     const li = document.createElement('li');
     li.dataset.id = o.id;
     const total = o.estimated_total != null ? ` · est. ${money(o.estimated_total)}` : '';
-    const tag = o.reorder_of ? '<span class="tag">reorder</span>' : '';
+    const aldiOrder = o.cart === 'aldi';
+    const tag = (aldiOrder ? '<span class="tag">Aldi</span>' : '') + (o.reorder_of ? '<span class="tag">reorder</span>' : '');
     const details = o.id !== openOrderId ? '' : `
       <div class="details">
         <ul>${o.items.map(i => `<li>${thumb(i.image)}
           <div class="name"><div>${esc(i.name)}</div><div class="size">${esc(i.size)} ${priceHtml(i)}</div></div>
           <span class="qty">&times;${i.quantity}</span></li>`).join('')}</ul>
         <div class="row" style="margin-top:10px">
-          <button data-reorder="${esc(o.id)}">Send to cart again</button>
+          <button data-reorder="${esc(o.id)}">${aldiOrder ? 'Send to Aldi cart again' : 'Send to cart again'}</button>
           <button class="danger" data-delete-order="${esc(o.id)}">Delete</button>
         </div>
       </div>`;
@@ -939,12 +1016,18 @@ $('orders').addEventListener('click', async (e) => {
     banner(null, '', false, obanner);
     const source = orders.find(o => o.id === reorderId);
     try {
-      const { order, warning } = await api('POST', `/api/orders/${encodeURIComponent(reorderId)}/reorder`);
+      const { order, warning, bad_upcs } = await api('POST', `/api/orders/${encodeURIComponent(reorderId)}/reorder`);
       await loadOrders();
-      const done = `Sent ${plural(order ? order.item_count : source.item_count, 'item')} to your Kroger cart. ` +
-        `Finish checkout at <a href="https://www.kroger.com/cart" target="_blank" rel="noopener">kroger.com/cart</a> or in the Kroger app.`;
-      banner(warning ? 'warn' : 'ok', warning ? `${esc(warning)} ${done}` : done, true, obanner);
+      const count = plural(order ? order.item_count : source.item_count, 'item');
+      const done = source?.cart === 'aldi'
+        ? `Sent ${count} to your Aldi cart. Finish checkout at <a href="https://www.aldi.us/store/aldi/storefront" target="_blank" rel="noopener">aldi.us</a>.`
+        : `Sent ${count} to your Kroger cart. ` +
+          `Finish checkout at <a href="https://www.kroger.com/cart" target="_blank" rel="noopener">kroger.com/cart</a> or in the Kroger app.`;
+      const rejected = (bad_upcs || []).map(u => source?.items.find(i => i.upc === u)?.name || u);
+      const extra = (warning ? ` ${esc(warning)}` : '') + (rejected.length ? ` Aldi wouldn't take: ${rejected.map(esc).join(', ')}.` : '');
+      banner(extra ? 'warn' : 'ok', done + extra, true, obanner);
     } catch (err) {
+      if (err.data && err.data.aldi_signed_in === false) state.aldi_account = null;
       const bad = (err.data && err.data.bad_upcs) || [];
       const names = bad.map(u => source?.items.find(i => i.upc === u)?.name || u);
       banner('error', err.message + (names.length ? ` Rejected: ${names.join(', ')}.` : ''), false, obanner);
