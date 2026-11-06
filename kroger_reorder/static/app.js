@@ -1011,27 +1011,35 @@ async function afterCartChange(message) {
 $('footer-cart').onclick = openCart;
 $('orders-cart').onclick = openCart;
 $('cart-close').onclick = () => $('cart-dialog').close();
-$('cart-checkout').onclick = async () => {
-  try {
-    const { order } = await api('POST', '/api/cart/checkout');
-    await afterCartChange(`Recorded as one order of ${plural(order.item_count, 'item')}. Add the receipt to it on the Orders tab when you have it.`);
-  } catch (e) { banner('error', e.message, false, $('cart-banner')); }
-};
-$('cart-drop').onclick = async () => {
+// Both buttons stay disabled while either request runs, so a double-click can't act twice.
+async function cartAction(run) {
+  $('cart-checkout').disabled = $('cart-drop').disabled = true;
+  try { await run(); }
+  catch (e) { banner('error', e.message, false, $('cart-banner')); }
+  finally { $('cart-checkout').disabled = $('cart-drop').disabled = !state.kroger_cart.count; }
+}
+$('cart-checkout').onclick = () => cartAction(async () => {
+  const { order } = await api('POST', '/api/cart/checkout');
+  await afterCartChange(`Recorded as one order of ${plural(order.item_count, 'item')}. Add the receipt to it on the Orders tab when you have it.`);
+});
+$('cart-drop').onclick = () => {
   if (!confirm('Forget what this app put in your Kroger cart? Those sends stay in Orders as dropped and don\'t count as purchases.')) return;
-  try {
+  cartAction(async () => {
     await api('POST', '/api/cart/empty');
     await afterCartChange('Your Kroger cart is empty here too.');
-  } catch (e) { banner('error', e.message, false, $('cart-banner')); }
+  });
 };
 
 // -- receipts (v7.3) ---------------------------------------------------------------------------
 
 let receiptOrderId = null;
 let receiptFiles = [];
+let receiptRequest = 0;   // bumped on every open, so a slow answer for an earlier opening is ignored
 
 function openReceipt(orderId) {
   receiptOrderId = orderId;
+  receiptRequest += 1;
+  $('receipt-go').disabled = false;
   receiptFiles = [];
   $('receipt-text').value = '';
   $('receipt-files').value = '';
@@ -1058,6 +1066,7 @@ $('receipt-files').onchange = async (e) => {
 };
 $('receipt-go').onclick = async () => {
   const rb = $('receipt-banner');
+  const mine = receiptRequest;
   $('receipt-go').disabled = true;
   try {
     banner('warn', 'Claude is reading the receipt… this takes 10 to 30 seconds.', false, rb);
@@ -1066,18 +1075,20 @@ $('receipt-go').onclick = async () => {
       photos: receiptFiles.map(({ media_type, data }) => ({ media_type, data })),
     });
     orders = orders.map(o => o.id === order.id ? order : o);
-    openOrderId = order.id;
     renderOrders();
     loadUsage().catch(() => {});
+    if (mine !== receiptRequest) return;   // the dialog was closed and opened for another order meanwhile
+    openOrderId = order.id;
+    renderOrders();
     $('receipt-dialog').close();
     const counts = {};
     order.items.forEach(i => { if (i.outcome) counts[i.outcome.status] = (counts[i.outcome.status] || 0) + 1; });
     const bits = Object.entries(counts).filter(([k]) => k !== 'received').map(([k, n]) => `${n} ${OUTCOME_TEXT[k].toLowerCase()}`);
     banner('ok', `Receipt added${bits.length ? `: ${bits.join(', ')}` : ''}.`, false, $('orders-banner'));
   } catch (err) {
-    banner('error', err.message, false, rb);
+    if (mine === receiptRequest) banner('error', err.message, false, rb);
   } finally {
-    $('receipt-go').disabled = false;
+    if (mine === receiptRequest) $('receipt-go').disabled = false;
   }
 };
 
@@ -1087,6 +1098,10 @@ function outcomeHtml(item, order) {
   const o = item.outcome;
   if (!o || !OUTCOME_TEXT[o.status]) return '';
   let html = `<span class="badge ${esc(o.status)}">${OUTCOME_TEXT[o.status]}</span>`;
+  if (o.refunded && o.status !== 'refunded') html += ` <span class="badge refunded">${Number(o.refunded)} refunded</span>`;
+  if (o.quantity != null && o.status !== 'refunded' && o.status !== 'out_of_stock' && Number(o.quantity) !== Number(item.quantity)) {
+    html += ` <span class="muted">got ${Number(o.quantity)}</span>`;
+  }
   if (o.status === 'substituted' && o.substitute) {
     html += ` <span class="muted">got ${esc(o.substitute)}</span>`;
     if (order.list_slug && state.lists.some(l => l.slug === order.list_slug)) {
@@ -1154,7 +1169,7 @@ function renderOrders() {
         <div class="row" style="margin-top:10px">
           <button data-reorder="${esc(o.id)}">${aldiOrder ? 'Send to Aldi cart again' : 'Send to cart again'}</button>
           ${receiptButton}
-          <button class="danger" data-delete-order="${esc(o.id)}">Delete</button>
+          ${status === 'in_cart' ? '' : `<button class="danger" data-delete-order="${esc(o.id)}">Delete</button>`}
         </div>
       </div>`;
     li.innerHTML = `

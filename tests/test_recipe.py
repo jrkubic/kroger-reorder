@@ -277,7 +277,7 @@ def test_suggest_cli_runs_without_tools():
 
 
 def test_suggest_timeout_mentions_recipe_page():
-    def slow(args, stdin_text, timeout):
+    def slow(args, stdin_text, timeout, cwd=None):
         raise CliTimeout()
     with pytest.raises(VisionError) as exc:
         suggest(EXTRACTED, "", "Weekly", [], "", model="m", timeout=30, runner=slow, which=which_ok)

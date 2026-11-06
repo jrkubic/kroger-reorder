@@ -71,6 +71,22 @@ from receipts Jake chooses to paste.
   Aldi order, 400 "Paste the receipt or add a screenshot." when empty, VisionError statuses as for
   photos, 422 "Claude couldn't read a receipt in that." when nothing usable came back.
 
+## Changes after review (2026-11-06)
+
+- Checkout, empty and receipt writes happen in one locked read-modify-write
+  (`Storage.change_orders`), so a double-clicked **I checked out** records one order, and a receipt is
+  applied to the order as it is after Claude answers (404 if it was deleted meanwhile). The page
+  disables the cart buttons while a request runs.
+- Receipt lines are combined per product: several lines for one UPC (part received, part out of
+  stock) give one outcome with the received units; refunded lines take units off what was received
+  (`outcome.refunded`), so a partial refund keeps the rest in usage. A quantity of 0 counts as 0.
+- With screenshots, Claude Code runs in the screenshots' temp folder rather than the app folder
+  (which holds `.env` and the Aldi sign-in), because Read needs no permission inside the working
+  folder; pasted text can't contain `<receipt>` tags.
+- In-cart sends can't be deleted (400); duplicate rows of one product are combined before the
+  overlap check; a failed history write says the doubling warning is off for that send; a merged
+  order takes the latest send's store.
+
 ## Testing
 
 `tests/test_orders.py` (cart_contents, merge, apply_receipt), `tests/test_usage.py` (status and

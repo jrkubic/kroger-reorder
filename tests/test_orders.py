@@ -167,3 +167,37 @@ def test_apply_receipt_second_paste_updates_only_what_it_mentions():
     assert by["2"]["outcome"]["status"] == "substituted"
     assert out["receipt"]["order_number"] == "112-345" and out["receipt"]["total"] == 41.27
     assert out["receipt"]["unmatched"] == ["Bag fee", "Not on order"]
+
+
+def test_apply_receipt_combines_lines_for_one_product():
+    order = sent("a", "2026-11-05T18:00:00+00:00", ("1", "Bananas", 3, 0.5), status="ordered")
+    parsed = {"lines": [
+        {"upc": "1", "name": "Bananas", "status": "received", "quantity": 2, "price": 1.0},
+        {"upc": "1", "name": "Bananas", "status": "out_of_stock", "quantity": 0, "price": None},
+    ]}
+    out = apply_receipt(order, parsed, now=NOW)["items"][0]["outcome"]
+    assert out == {"status": "received", "substitute": None, "quantity": 2, "price": 1.0}
+
+
+def test_apply_receipt_partial_refund_later_takes_units_off():
+    order = sent("a", "2026-11-05T18:00:00+00:00", ("1", "Bananas", 3, 0.5), status="ordered")
+    first = apply_receipt(order, {"lines": [{"upc": "1", "status": "received", "quantity": 3, "price": 1.5}]}, now=NOW)
+    out = apply_receipt(first, {"lines": [{"upc": "1", "status": "refunded", "quantity": 1, "price": -0.5}]}, now=NOW)
+    o = out["items"][0]["outcome"]
+    assert o["status"] == "received" and o["quantity"] == 2 and o["refunded"] == 1
+    out = apply_receipt(out, {"lines": [{"upc": "1", "status": "refunded", "quantity": None}]}, now=NOW)
+    o = out["items"][0]["outcome"]
+    assert o["status"] == "refunded" and o["quantity"] == 0 and o["refunded"] == 3
+
+
+def test_apply_receipt_refund_without_an_earlier_receipt_uses_the_ordered_amount():
+    order = sent("a", "2026-11-05T18:00:00+00:00", ("1", "Bananas", 3, 0.5), status="ordered")
+    o = apply_receipt(order, {"lines": [{"upc": "1", "status": "refunded", "quantity": 3}]}, now=NOW)["items"][0]["outcome"]
+    assert o["status"] == "refunded" and o["quantity"] == 0
+
+
+def test_merge_checkout_uses_the_latest_store():
+    a = sent("a", "2026-11-01T10:00:00+00:00", ("1", "Bananas", 1, 0.5))
+    b = {**sent("b", "2026-11-03T10:00:00+00:00", ("2", "Milk", 1, 3.0)), "store_id": "2", "store_name": "Other"}
+    merged, _ = merge_checkout([a, b], now=NOW)
+    assert merged["store_id"] == "2" and merged["store_name"] == "Other"

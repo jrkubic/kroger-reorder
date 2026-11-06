@@ -344,6 +344,7 @@ Kroger's API can add to your cart but can't read it, and adding a product that's
 - **Before each send**, the app compares the checked items with that record. If any are already in the cart it shows them ("Bananas: 2 in your cart (sent Nov 3), sending 2") and asks: **Send only what's missing** sends the difference and skips products already covered; **Send everything anyway** adds the full amounts; **Cancel** sends nothing. **Send to cart again** on the Orders tab asks the same way.
 - **I checked out** turns everything in the cart into one order, the way Kroger sees it. Sends count toward the usage profile only from then on.
 - **I emptied my cart** forgets the sends without counting them as purchases; they stay in Orders marked dropped.
+- A send that is still in the cart can't be deleted from Orders, since that would switch off the warning for its products; use one of the two buttons.
 
 It only knows what this app sent. Products you add on kroger.com or in the Kroger app aren't in the record, so the app can't warn about those.
 
@@ -352,7 +353,7 @@ It only knows what this app sent. Products you add on kroger.com or in the Kroge
 On any checked-out Kroger order, **Add receipt…** takes the order email, the pickup receipt, the order page from kroger.com pasted as text, or up to four screenshots. Claude reads it (same backends as photo suggestions) and matches each line to the order's products:
 
 - **Substituted**: what you got instead, with **Find it** to search for it and add it to the list.
-- **Out of stock** and **Refunded**: not counted in the usage profile.
+- **Out of stock** and **Refunded**: not counted in the usage profile. A product that arrived only in part (2 of 3) counts what arrived, and a partial refund takes the refunded units off.
 - The order number, date, amount paid, savings and fuel points show on the order; receipt lines that match nothing (bag fees, extra items) are listed below it.
 
 A refund email that comes days later can be added to the same order with **Add to receipt…**: it changes only the lines it mentions.
@@ -592,6 +593,8 @@ Aldi's catalog has no public API either. The app reads it the way the aldi.us se
 | `This order is still in your cart; check out first.` | Receipts go on checked-out orders: click the cart link and **I checked out**. |
 | `Paste the receipt or add a screenshot.` | The receipt dialog was empty. |
 | `Receipts are for Kroger orders.` / `This send was dropped from your cart.` | Only checked-out Kroger orders take a receipt. |
+| `This send is still in your Kroger cart; use I checked out or I emptied my cart instead.` | Deleting it would switch off the doubling warning for its products. |
+| `...couldn't save it to your order history... can't warn before sending them again.` | The send reached Kroger but `data/orders.json` couldn't be written. Check the disk; until then the app doesn't know those products are in your cart. |
 | `Claude couldn't read a receipt in that.` | Claude found no order number, total or product lines. Paste the whole email, or use screenshots. |
 | `Port 8000 is already in use` | Another copy is running, or something else owns the port. Close it, or set `PORT` in `.env` and update the redirect URL on your Kroger app to match. |
 | Phone cannot reach the wifi address | Allow `python.exe` / `pythonw.exe` through Windows Firewall on private networks, and confirm the PC's address has not changed. |

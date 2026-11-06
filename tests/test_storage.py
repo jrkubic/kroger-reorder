@@ -461,7 +461,7 @@ def test_update_and_replace_orders(tmp_path):
     assert st.update_order({"id": "a", "placed_at": "2026-11-01T00:00:00+00:00", "items": [], "status": "ordered"})
     assert st.get_order("a")["status"] == "ordered"
     assert not st.update_order({"id": "zzz", "items": []})
-    st.replace_orders(["a", "b"], {"id": "c", "placed_at": "2026-11-03T00:00:00+00:00", "items": []})
-    assert [o["id"] for o in st.list_orders()] == ["c"]
-    st.replace_orders(["c"], None)
-    assert st.list_orders() == []
+    assert st.change_orders(lambda orders: ([o for o in orders if o["id"] != "a"], len(orders))) == 2
+    assert [o["id"] for o in st.list_orders()] == ["b"]
+    assert st.change_orders(lambda orders: (None, "unchanged")) == "unchanged"
+    assert [o["id"] for o in st.list_orders()] == ["b"]

@@ -284,7 +284,9 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         try:
             storage.record_order(order)
         except OSError as exc:
-            return None, f"Sent to cart, but couldn't save it to your order history ({exc})."
+            lost = " The app won't know these are in your Kroger cart, so it can't warn before sending them again." \
+                if cart == KROGER else ""
+            return None, f"Sent to cart, but couldn't save it to your order history ({exc}).{lost}"
         return order, None
 
     def kroger_cart() -> list[dict]:
@@ -296,6 +298,14 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         the difference; "all" sends everything. Returns (refusal, items to send, names already there)."""
         if mode not in (None, "missing", "all"):
             return error(400, "mode must be 'missing' or 'all'."), [], []
+        combined: dict[str, dict] = {}   # one entry per product: a list may hold the same UPC twice
+        for i in items:
+            upc = str(i["upc"])
+            if upc in combined:
+                combined[upc]["quantity"] += int(i["quantity"])
+            else:
+                combined[upc] = {**i, "upc": upc, "quantity": int(i["quantity"])}
+        items = list(combined.values())
         have = {row["upc"]: row for row in kroger_cart()}
         overlap = [{"upc": str(i["upc"]), "name": i.get("name") or have[str(i["upc"])].get("name") or "",
                     "in_cart": have[str(i["upc"])]["quantity"], "sending": int(i["quantity"]),
@@ -697,6 +707,12 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
 
     @app.delete("/api/orders/{order_id}", status_code=204)
     def delete_order(order_id: str):
+        order = storage.get_order(order_id)
+        if order is None:
+            raise OrderNotFound(order_id)
+        if order.get("status") == IN_CART:
+            # Forgetting it would turn off the doubling warning for products still in the cart.
+            return error(400, "This send is still in your Kroger cart; use I checked out or I emptied my cart instead.")
         if not storage.delete_order(order_id):
             raise OrderNotFound(order_id)
         return Response(status_code=204)
@@ -733,18 +749,26 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
 
     @app.post("/api/cart/checkout")
     def checkout():
-        merged, removed = merge_checkout(storage.list_orders())
+        def change(orders_: list[dict]):
+            merged, removed = merge_checkout(orders_)
+            if merged is None:
+                return None, None
+            return [merged] + [o for o in orders_ if o["id"] not in set(removed)], merged
+
+        merged = storage.change_orders(change)
         if merged is None:
             return error(400, "Your Kroger cart is empty.")
-        storage.replace_orders(removed, merged)
         return {"order": merged}
 
     @app.post("/api/cart/empty")
     def empty_cart():
-        sends = in_cart(storage.list_orders())
-        for order in sends:
-            storage.update_order({**order, "status": DROPPED})
-        return {"dropped": len(sends)}
+        def change(orders_: list[dict]):
+            ids = {o["id"] for o in in_cart(orders_)}
+            if not ids:
+                return None, 0
+            return [{**o, "status": DROPPED} if o["id"] in ids else o for o in orders_], len(ids)
+
+        return {"dropped": storage.change_orders(change)}
 
     @app.post("/api/orders/{order_id}/receipt")
     def add_receipt(order_id: str, body: ReceiptRequest):
@@ -767,8 +791,17 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
                                     model=photo_model, timeout=photo_timeout)
         if not parsed.get("lines") and not any(parsed.get(k) for k in ("order_number", "total")):
             return error(422, "Claude couldn't read a receipt in that.")
-        updated = apply_receipt(order, parsed)
-        storage.update_order(updated)
+        def change(orders_: list[dict]):
+            # Apply to the order as it is now: another paste may have landed while Claude was reading.
+            current = next((o for o in orders_ if o["id"] == order_id), None)
+            if current is None:
+                return None, None
+            updated = apply_receipt(current, parsed)
+            return [updated if o["id"] == order_id else o for o in orders_], updated
+
+        updated = storage.change_orders(change)
+        if updated is None:
+            raise OrderNotFound(order_id)
         return {"order": updated}
 
     # -- usage profile, photo and recipe suggestions ---------------------------------------------

@@ -70,3 +70,11 @@ def test_profile_uses_receipt_outcomes():
     rows = {r["upc"]: r for r in usage_profile([o], now=NOW)}
     assert set(rows) == {"1", "4"}
     assert rows["1"]["avg_quantity"] == 1
+
+
+def test_profile_skips_items_fully_refunded_and_counts_partial():
+    o = order("2026-10-24T10:00:00+00:00", ("1", "Whole Milk", 3), ("2", "Eggs", 2))
+    o["items"][0]["outcome"] = {"status": "received", "substitute": None, "quantity": 2, "price": None, "refunded": 1}
+    o["items"][1]["outcome"] = {"status": "received", "substitute": None, "quantity": 0, "price": None}
+    rows = {r["upc"]: r for r in usage_profile([o], now=NOW)}
+    assert set(rows) == {"1"} and rows["1"]["avg_quantity"] == 2

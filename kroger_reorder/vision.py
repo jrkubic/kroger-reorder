@@ -236,12 +236,13 @@ def complete_api(system: str, user_text: str, *, images: Sequence[Path] = (), wo
 
 # -- CLI backend ------------------------------------------------------------------------
 
-def run_cli(args: list[str], stdin_text: str, timeout: float) -> RunResult:
+def run_cli(args: list[str], stdin_text: str, timeout: float, cwd: str | None = None) -> RunResult:
     """Run the CLI with the prompt on stdin. On Windows `claude` is a .CMD shim, and cmd.exe cuts a
-    multi-line argument at the first newline, so the prompt must never travel as an argument."""
+    multi-line argument at the first newline, so the prompt must never travel as an argument.
+    `cwd` is where Claude Code starts, which is also the folder its Read tool may use freely."""
     try:
         proc = subprocess.run(args, input=stdin_text, capture_output=True, text=True, encoding="utf-8",
-                              timeout=timeout)
+                              timeout=timeout, cwd=cwd)
     except subprocess.TimeoutExpired as exc:
         raise CliTimeout() from exc
     return RunResult(proc.returncode, proc.stdout or "", proc.stderr or "")
@@ -252,7 +253,7 @@ def cli_prompt(system: str, user_text: str, cli_preamble: str = "") -> str:
 
 
 def complete_cli(system: str, user_text: str, *, cli_preamble: str = "", cli_tools: tuple[str, ...] = (),
-                 wording: Wording, model: str, timeout: float,
+                 cli_cwd: str | None = None, wording: Wording, model: str, timeout: float,
                  runner: Runner = run_cli, which: Which = shutil.which) -> str:
     exe = which("claude")
     if not exe:
@@ -267,7 +268,10 @@ def complete_cli(system: str, user_text: str, *, cli_preamble: str = "", cli_too
     if model:
         args += ["--model", model]
     try:
-        result = runner(args, cli_prompt(system, user_text, cli_preamble), timeout)
+        if cli_cwd:
+            result = runner(args, cli_prompt(system, user_text, cli_preamble), timeout, cwd=cli_cwd)
+        else:
+            result = runner(args, cli_prompt(system, user_text, cli_preamble), timeout)
     except CliTimeout as exc:
         raise _timeout_error(timeout, wording.timeout) from exc
     if result.returncode != 0:
@@ -292,11 +296,14 @@ def complete(system: str, user_text: str, *, images: Sequence[Path] = (), cli_pr
              runner: Runner = run_cli, which: Which = shutil.which) -> str:
     """Ask Claude for a text answer. API backend when `api_key` is given, otherwise the Claude Code CLI.
     `images` go inline on the API; on the CLI the caller names them in `cli_preamble` and grants the
-    `Read` tool through `cli_tools`."""
+    `Read` tool through `cli_tools`, and Claude Code runs in the images' folder (never the app's own,
+    which holds .env and the sign-ins), since reading files there needs no permission."""
     if api_key:
         return complete_api(system, user_text, images=images, wording=wording, model=model, timeout=timeout,
                             api_key=api_key, make_client=make_client)
-    return complete_cli(system, user_text, cli_preamble=cli_preamble, cli_tools=cli_tools, wording=wording,
+    folders = {str(Path(p).parent) for p in images}
+    return complete_cli(system, user_text, cli_preamble=cli_preamble, cli_tools=cli_tools,
+                        cli_cwd=folders.pop() if len(folders) == 1 else None, wording=wording,
                         model=model, timeout=timeout, runner=runner, which=which)
 
 

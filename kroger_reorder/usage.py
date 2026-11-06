@@ -37,9 +37,9 @@ def usage_profile(orders: list[dict], now: datetime | None = None) -> list[dict]
             if not isinstance(item, dict) or not item.get("upc"):
                 continue
             outcome = item.get("outcome") if isinstance(item.get("outcome"), dict) else {}
-            if outcome.get("status") in ("out_of_stock", "refunded"):
-                continue  # a receipt says it never arrived
-            if outcome.get("quantity"):
+            if outcome.get("status") in ("out_of_stock", "refunded") or outcome.get("quantity") == 0:
+                continue  # a receipt says it never arrived, or all of it was refunded
+            if outcome.get("quantity") is not None:
                 item = {**item, "quantity": outcome["quantity"]}  # what was received, substitutes included
             upc = str(item["upc"])
             row = by_upc.setdefault(upc, {"upc": upc, "name": "", "quantities": [], "dates": []})

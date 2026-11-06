@@ -1408,3 +1408,97 @@ def test_receipt_refusals(receipt_client, storage):
     r = receipt_client.post(f"/api/orders/{order['id']}/receipt", json={"text": "hello"})
     assert r.status_code == 422 and r.json()["error"] == "Claude couldn't read a receipt in that."
     assert receipt_client.calls and len(receipt_client.calls) == 1
+
+
+def test_concurrent_checkouts_record_one_order(client):
+    import threading
+    send(client, {**MILK})
+    send(client, {**EGGS})
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(client.post("/api/cart/checkout").status_code))
+               for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == [200, 400, 400, 400]
+    assert len(client.get("/api/orders").json()["orders"]) == 1
+
+
+def test_in_cart_send_cannot_be_deleted(client):
+    order = push_one(client, checkout=False)
+    r = client.delete(f"/api/orders/{order['id']}")
+    assert r.status_code == 400 and "I emptied my cart" in r.json()["error"]
+    assert client.get("/api/cart").json()["orders"] == 1
+
+
+def test_mode_missing_combines_duplicate_rows(client, kroger):
+    send(client, {**MILK, "quantity": 1})
+    kroger.cart_calls.clear()
+    r = send(client, {**MILK, "quantity": 1}, {**MILK, "quantity": 1}, mode="missing")
+    assert r.status_code == 200 and kroger.cart_calls == [[("0001", 1)]]
+
+
+def test_mode_missing_with_empty_cart_sends_everything(client, kroger):
+    assert send(client, {**MILK, "quantity": 2}, mode="missing").status_code == 200
+    assert kroger.cart_calls == [[("0001", 2)]]
+
+
+def test_reorder_sends_without_receipt_outcomes(receipt_client, kroger):
+    order = push_one(receipt_client)
+    receipt_client.post(f"/api/orders/{order['id']}/receipt", json={"text": "r"})
+    r = receipt_client.post(f"/api/orders/{order['id']}/reorder")
+    assert r.status_code == 200
+    assert all("outcome" not in i for i in r.json()["order"]["items"])
+
+
+def test_receipt_on_order_before_v73_and_dropped(receipt_client, storage):
+    storage.record_order({"id": "old", "placed_at": "2026-10-01T00:00:00+00:00",
+                          "items": [{"upc": "0001", "name": "Whole Milk", "quantity": 1}]})
+    assert receipt_client.post("/api/orders/old/receipt", json={"text": "r"}).status_code == 200
+    push_one(receipt_client, checkout=False)
+    receipt_client.post("/api/cart/empty")
+    dropped = next(o for o in receipt_client.get("/api/orders").json()["orders"] if o.get("status") == "dropped")
+    r = receipt_client.post(f"/api/orders/{dropped['id']}/receipt", json={"text": "r"})
+    assert r.json()["error"] == "This send was dropped from your cart."
+
+
+def test_receipt_for_order_deleted_while_reading_is_404(receipt_client, storage, monkeypatch):
+    order = push_one(receipt_client)
+    real_change = storage.change_orders
+
+    def deleted_first(change):   # the order disappears while Claude is reading
+        storage.delete_order(order["id"])
+        return real_change(change)
+
+    monkeypatch.setattr(storage, "change_orders", deleted_first)
+    r = receipt_client.post(f"/api/orders/{order['id']}/receipt", json={"text": "r"})
+    assert r.status_code == 404
+    assert receipt_client.get("/api/orders").json()["orders"] == []
+
+
+def test_receipt_reader_error_keeps_its_status(storage, kroger):
+    from kroger_reorder.vision import VisionError
+
+    def failing(*a, **k):
+        raise VisionError(504, "Claude took longer than 90 seconds; try a shorter paste.")
+
+    c = TestClient(create_app(storage, kroger, receipt_reader=failing))
+    order = push_one(c)
+    r = c.post(f"/api/orders/{order['id']}/receipt", json={"text": "r"})
+    assert r.status_code == 504 and "longer" in r.json()["error"]
+
+
+def test_receipt_rejects_bad_screenshot(receipt_client):
+    order = push_one(receipt_client)
+    r = receipt_client.post(f"/api/orders/{order['id']}/receipt",
+                            json={"photos": [{"media_type": "image/png", "data": "not base64!"}]})
+    assert r.status_code == 400 and receipt_client.calls == []
+
+
+def test_failed_history_write_warns_that_doubling_protection_is_off(client, storage, monkeypatch):
+    def boom(order):
+        raise OSError("disk full")
+    monkeypatch.setattr(storage, "record_order", boom)
+    r = send(client, {**MILK})
+    assert "can't warn before sending them again" in r.json()["warning"]
