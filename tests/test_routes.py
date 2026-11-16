@@ -328,6 +328,7 @@ class FakeAldi:
         self.cart_calls = []                 # (sid, [(upc, quantity)])
         self.unknown = set()                 # upcs fill_cart rejects
         self.cart_error: Exception | None = None
+        self.cart: set[str] = set()          # what the aldi.us cart holds; clear() is a checkout
         self.catalog = {"aldi:16902710": aldi_product("aldi:16902710", "Whole Milk"),
                         "aldi:20957684": aldi_product("aldi:20957684", "2% Milk", price=2.85, promo=2.49)}
 
@@ -361,7 +362,10 @@ class FakeAldi:
         if sid not in self.accounts:
             raise AldiError(401, SIGNED_OUT)
         upcs = [u for u, _ in wanted]
-        return CartResult(added=[u for u in upcs if u not in self.unknown], rejected=[u for u in upcs if u in self.unknown])
+        before = sorted(self.cart)
+        added = [u for u in upcs if u not in self.unknown]
+        self.cart.update(added)
+        return CartResult(added=added, rejected=[u for u in upcs if u in self.unknown], already_in_cart=before)
 
 
 @pytest.fixture
@@ -1195,6 +1199,21 @@ def test_push_aldi_reports_rejected_products(aldi_client, aldi_list, fake_aldi, 
     assert len(storage.list_orders()) == 1
 
 
+def test_sending_again_before_checkout_updates_the_same_aldi_order(aldi_client, aldi_list, fake_aldi, storage,
+                                                                    connected):
+    first = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[MILK_ALDI]).json()["order"]
+    # Forgot the eggs: the whole list goes again while the milk is still in the aldi.us cart.
+    r = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[MILK_ALDI, EGGS_ALDI])
+    assert r.status_code == 200 and r.json()["order"]["id"] == first["id"]
+    [order] = storage.list_orders()
+    assert [(i["upc"], i["quantity"]) for i in order["items"]] == [("aldi:16902710", 2), ("aldi:20957684", 1)]
+    assert order["placed_at"] == first["placed_at"] and order["updated_at"]
+    # After checkout at aldi.us the cart is empty, and the next send is a new order.
+    fake_aldi.cart.clear()
+    r = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[EGGS_ALDI])
+    assert r.json()["order"]["id"] != first["id"] and len(storage.list_orders()) == 2
+
+
 def test_push_aldi_signed_out_forgets_the_cookie(aldi_client, aldi_list, fake_aldi, storage, connected):
     fake_aldi.accounts.clear()
     r = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[MILK_ALDI])
@@ -1221,6 +1240,7 @@ def test_push_aldi_without_an_aldi_client_is_refused(client, aldi):
 
 def test_reorder_an_aldi_order_goes_to_the_aldi_cart(aldi_client, aldi_list, fake_aldi, kroger, connected):
     source = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[MILK_ALDI]).json()["order"]
+    fake_aldi.cart.clear()   # checked out at aldi.us
     r = aldi_client.post(f"/api/orders/{source['id']}/reorder")
     assert r.status_code == 200
     assert fake_aldi.cart_calls[-1] == ("v2.good", [("aldi:16902710", 2)]) and kroger.cart_calls == []
@@ -1237,6 +1257,7 @@ def test_kroger_orders_say_so(client, kroger):
 
 def test_reorder_an_aldi_order_reports_rejections_and_sign_out(aldi_client, aldi_list, fake_aldi, storage, connected):
     source = aldi_client.post(f"/api/lists/{aldi_list}/push", json=[MILK_ALDI, EGGS_ALDI]).json()["order"]
+    fake_aldi.cart.clear()   # checked out at aldi.us
     fake_aldi.unknown = {"aldi:20957684"}
     r = aldi_client.post(f"/api/orders/{source['id']}/reorder")
     assert r.status_code == 200 and r.json()["bad_upcs"] == ["aldi:20957684"]

@@ -90,9 +90,11 @@ class _Session:
 
 @dataclass
 class CartResult:
-    """What a send did: products now in the cart, and products aldi.us would not take."""
+    """What a send did: products now in the cart, products aldi.us would not take, and every
+    product the cart held before the send (which tells an unfinished order from a checked-out one)."""
     added: list[str]
     rejected: list[str]
+    already_in_cart: list[str] = field(default_factory=list)
 
 
 def is_product(upc: str) -> bool:
@@ -348,8 +350,8 @@ class AldiClient:
             have: dict[str, float] = {}
             for entry in (cart.get("cartItemCollection") or {}).get("cartItems") or []:
                 pid = str(((entry or {}).get("basketProduct") or {}).get("productId") or "")
-                if pid.isdigit():
-                    have[PREFIX + pid] = float(entry.get("quantity") or 0)
+                if pid.isdigit() and float(entry.get("quantity") or 0) > 0:
+                    have[PREFIX + pid] = float(entry["quantity"])
 
             def item_id(upc: str) -> str:
                 return f"items_{context.location_id}-{product_id(upc)}"
@@ -387,4 +389,4 @@ class AldiClient:
                                 raise
                 took |= sent or set()
             return CartResult(added=[u for u in products if u in took],
-                              rejected=[u for u in products if u not in took])
+                              rejected=[u for u in products if u not in took], already_in_cart=list(have))

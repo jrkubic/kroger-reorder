@@ -57,6 +57,38 @@ def build_order(items: list[dict], *, list_slug: str | None, list_name: str | No
     return order
 
 
+def open_aldi_order(orders: list[dict], already_in_cart) -> dict | None:
+    """The newest Aldi order while some of its products are still in the aldi.us cart, i.e. not yet
+    checked out; None once the cart no longer holds any of them."""
+    aldi = [o for o in orders if o.get("cart") == "aldi"]
+    if not aldi:
+        return None
+    newest = max(aldi, key=lambda o: str(o.get("placed_at", "")))
+    there = set(already_in_cart)
+    return newest if any(str(i.get("upc")) in there for i in newest.get("items", []) if isinstance(i, dict)) else None
+
+
+def add_to_order(order: dict, items: list[dict], *, list_slug: str | None, list_name: str | None,
+                 now: datetime | None = None) -> dict:
+    """A copy of an unfinished Aldi order with another send folded in. aldi.us sets quantities, so
+    each product keeps the larger of the two; products not in this send stay (they're still in the cart)."""
+    now = now or datetime.now(timezone.utc)
+    snap = [dict(i) for i in order.get("items", []) if isinstance(i, dict)]
+    by_upc = {str(i.get("upc")): i for i in snap}
+    for item in map(snapshot_item, items):
+        kept = by_upc.get(item["upc"])
+        if kept is None:
+            snap.append(item)
+            by_upc[item["upc"]] = item
+        else:
+            kept.update({**item, "quantity": max(_quantity(kept), item["quantity"])})
+    names = [n for n in (order.get("list_name"), list_name) if n]
+    return {**order, "items": snap, "estimated_total": _estimate(snap), "item_count": len(snap),
+            "updated_at": now.isoformat(timespec="seconds"),
+            "list_name": " + ".join(dict.fromkeys(names)) or None,
+            "list_slug": order.get("list_slug") if order.get("list_slug") == list_slug else None}
+
+
 # -- v7.3: what the app put in the Kroger cart, checkout, receipts ------------------------------
 IN_CART, ORDERED, DROPPED = "in_cart", "ordered", "dropped"
 OUTCOMES = ("received", "substituted", "out_of_stock", "refunded")

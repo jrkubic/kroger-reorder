@@ -309,6 +309,7 @@ def test_fill_cart_sets_each_product_to_at_least_the_wanted_quantity(client, sit
     result = client.fill_cart(SID, [("aldi:25720157", 4), ("aldi:16383764", 3)])
     assert updates(site) == [{"items_24032-25720157": 4.0, "items_24032-16383764": 3.0}]
     assert (result.added, result.rejected) == (["aldi:25720157", "aldi:16383764"], [])
+    assert result.already_in_cart == ["aldi:25720157"]   # what the cart held before this send
     mutation = [q for o, q in site.calls if o == "UpdateCartItemsMutation"][0]
     assert json.loads(mutation["variables"])["cartId"] == "20000000001"
     assert json.loads(mutation["extensions"])["persistedQuery"]["sha256Hash"] == UPDATE_CART_HASH

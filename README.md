@@ -70,7 +70,7 @@ Or with Docker: `docker compose up -d`. Full details, including registering the 
 - **Named lists.** Create, rename, duplicate, and delete lists. Check or uncheck items per trip and set quantities.
 - **Other stores.** A list can belong to Aldi, Meijer or Walmart instead of Kroger. Such a list ends with **Open at &lt;store&gt;**: a link per checked item on the store's own site plus a copyable text list. Import, Photo and Recipe work on them too.
 - **Aldi catalog.** Aldi lists search and match against aldi.us for your nearest store: product names, sizes, photos, prices and sale prices, refreshed like Kroger's. Items Aldi doesn't sell can still be added by name. Meijer and Walmart lists hold plain names.
-- **Aldi cart.** Paste your aldi.us sign-in once and **Send to Aldi cart** fills your own aldi.us cart with the list's checked Aldi products. Sending again never doubles quantities. Aldi sends are recorded in order history like Kroger ones.
+- **Aldi cart.** Paste your aldi.us sign-in once and **Send to Aldi cart** fills your own aldi.us cart with the list's checked Aldi products. Sending again never doubles quantities. Aldi sends are recorded in order history like Kroger ones; sending again before checkout updates the same order.
 - **Catalog search.** Search your chosen store and add products with their photo, size, and price.
 - **Sale badges.** Promo prices show in green with the regular price struck through. Prices refresh in the background once a day or on demand.
 - **Send to cart.** Pushes every checked item to your Kroger cart through the official Cart API. Rejected items are highlighted so you can swap them.
@@ -330,7 +330,7 @@ From then on **Send to Aldi cart** puts every checked Aldi product in your aldi.
 - aldi.us sets quantities rather than adding to them. Each product ends up with at least the list's quantity: sending twice never doubles, and a larger amount already in the cart is kept (and not sent again). There is no need to empty the cart first.
 - Items added as typed have no Aldi product to send. The banner names them; shop them with **Open at Aldi**.
 - A product Aldi won't take (sold out, or gone from the catalog) is highlighted, and the rest are still added.
-- Every send is recorded in **Orders** with an Aldi tag, and **Send to Aldi cart again** repeats it.
+- Sends are recorded in **Orders** with an Aldi tag, and **Send to Aldi cart again** repeats one. Sending again before you check out (say, for an item you forgot) updates the same order rather than adding another: the app sees that the cart still holds products from the last Aldi order. Once you check out at aldi.us the cart is empty, and the next send starts a new order.
 - The sign-in lasts as long as aldi.us keeps it. Logging out at aldi.us ends it; the app then says so and asks you to connect again.
 
 ### Sale prices

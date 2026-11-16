@@ -201,3 +201,45 @@ def test_merge_checkout_uses_the_latest_store():
     b = {**sent("b", "2026-11-03T10:00:00+00:00", ("2", "Milk", 1, 3.0)), "store_id": "2", "store_name": "Other"}
     merged, _ = merge_checkout([a, b], now=NOW)
     assert merged["store_id"] == "2" and merged["store_name"] == "Other"
+
+
+# -- Aldi: a send while the last Aldi order is still in the cart updates it ---------------------
+from kroger_reorder.orders import add_to_order, open_aldi_order  # noqa: E402
+
+
+def _aldi(id_, placed, upcs, **extra):
+    return {"id": id_, "placed_at": placed, "cart": "aldi", "list_slug": "fridge", "list_name": "Fridge",
+            "items": [{"upc": u, "quantity": 1} for u in upcs], **extra}
+
+
+def test_open_aldi_order_is_the_newest_aldi_order_with_products_still_in_the_cart():
+    old = _aldi("a1", "2026-11-01T00:00:00+00:00", ["aldi:1"])
+    new = _aldi("a2", "2026-11-10T00:00:00+00:00", ["aldi:2", "aldi:3"])
+    kroger = {"id": "k1", "placed_at": "2026-11-12T00:00:00+00:00", "items": [{"upc": "aldi:3", "quantity": 1}]}
+    assert open_aldi_order([old, kroger, new], ["aldi:3", "aldi:9"])["id"] == "a2"
+    # Checked out: the cart no longer holds anything from the newest order, so nothing is open,
+    # even when it holds something from an older one.
+    assert open_aldi_order([old, new], ["aldi:1"]) is None
+    assert open_aldi_order([old, new], []) is None
+    assert open_aldi_order([kroger], ["aldi:3"]) is None
+
+
+def test_add_to_order_keeps_the_order_and_takes_the_larger_quantity():
+    order = build_order([{"upc": "aldi:1", "name": "Milk", "quantity": 2, "price": 3.0},
+                         {"upc": "aldi:2", "name": "Eggs", "quantity": 1, "price": 2.0}],
+                        list_slug="fridge", list_name="Fridge", store={"store_name": "Aldi"}, cart="aldi")
+    now = datetime(2026, 11, 16, 19, 8, tzinfo=timezone.utc)
+    updated = add_to_order(order, [{"upc": "aldi:1", "name": "Milk", "quantity": 1, "price": 3.0},
+                                   {"upc": "aldi:3", "name": "Butter", "quantity": 1, "price": 2.89, "promo": 1.99}],
+                           list_slug="fridge", list_name="Fridge", now=now)
+    assert updated["id"] == order["id"] and updated["placed_at"] == order["placed_at"]
+    assert [(i["upc"], i["quantity"]) for i in updated["items"]] == [("aldi:1", 2), ("aldi:2", 1), ("aldi:3", 1)]
+    assert updated["item_count"] == 3 and updated["estimated_total"] == 9.99
+    assert updated["updated_at"] == now.isoformat(timespec="seconds")
+    assert updated["list_name"] == "Fridge" and updated["list_slug"] == "fridge"
+
+
+def test_add_to_order_from_another_list_names_both():
+    order = _aldi("a1", "2026-11-01T00:00:00+00:00", ["aldi:1"])
+    updated = add_to_order(order, [{"upc": "aldi:2", "quantity": 1}], list_slug="party", list_name="Party")
+    assert updated["list_name"] == "Fridge + Party" and updated["list_slug"] is None

@@ -23,7 +23,8 @@ from pydantic import BaseModel
 from .aldi import SID_COOKIE, SIGNED_OUT, AldiError
 from .importer import parse as parse_import
 from .kroger import KrogerError, NotSignedIn
-from .orders import DROPPED, IN_CART, apply_receipt, build_order, cart_contents, in_cart, merge_checkout
+from .orders import (DROPPED, IN_CART, add_to_order, apply_receipt, build_order, cart_contents, in_cart, merge_checkout,
+                     open_aldi_order)
 from .receipt import read as read_receipt
 from .recipe import extract as extract_recipe, fetch_page, suggest as suggest_recipe
 from .settings import DEFAULT_PHOTO_MODEL
@@ -275,14 +276,27 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         # Whole-token match so "1111041" is not flagged when Kroger rejects "0001111041700".
         return [u for u in upcs if re.search(rf"(?<!\d){re.escape(u)}(?!\d)", exc.message)]
 
-    def record_order(items: list[dict], *, cart: str = KROGER, **meta) -> tuple[dict | None, str | None]:
+    def record_order(items: list[dict], *, cart: str = KROGER, already_in_cart: list[str] | None = None,
+                     **meta) -> tuple[dict | None, str | None]:
         """Save an order after the store accepted the cart. The cart is already filled, so a disk
-        failure here is reported as a warning rather than an error."""
+        failure here is reported as a warning rather than an error. An Aldi send while the last Aldi
+        order is still in the cart (`already_in_cart` holds some of it) updates that order instead."""
         store = current_store() if cart == KROGER else {"store_id": None, "store_name": provider(cart).name}
         # A Kroger send sits in the cart until the user says they checked out (or emptied it).
         order = build_order(items, store=store, cart=cart, status=IN_CART if cart == KROGER else None, **meta)
+
+        def change(orders_: list[dict]):
+            unfinished = open_aldi_order(orders_, already_in_cart or [])
+            if unfinished is None:
+                return [order, *orders_], order
+            updated = add_to_order(unfinished, items, list_slug=meta.get("list_slug"), list_name=meta.get("list_name"))
+            return [updated if o["id"] == unfinished["id"] else o for o in orders_], updated
+
         try:
-            storage.record_order(order)
+            if cart == KROGER:
+                storage.record_order(order)
+            else:
+                order = storage.change_orders(change)
         except OSError as exc:
             lost = " The app won't know these are in your Kroger cart, so it can't warn before sending them again." \
                 if cart == KROGER else ""
@@ -633,7 +647,7 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         added = [i for i in items if i["upc"] in set(result.added)]
         if not added:
             return error(502, "Aldi wouldn't add any of these items.", bad_upcs=result.rejected)
-        order, warning = record_order(added, cart="aldi", **meta)
+        order, warning = record_order(added, cart="aldi", already_in_cart=result.already_in_cart, **meta)
         return {"added": added, "bad_upcs": result.rejected, "order": order, "warning": warning}
 
     def push_aldi(slug: str, loaded: ListLoad, models: list[ItemModel]):
