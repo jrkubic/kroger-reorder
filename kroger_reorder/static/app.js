@@ -6,7 +6,7 @@ const STALE_MS = 24 * 60 * 60 * 1000;
 
 let state = { store: null, signed_in: false, lists: [], active_list: null, name: '', items: [], warning: null,
               photo_backend: null, public_url: null,
-              stores: [],            // [{key, name, catalog, cart}] from /api/state: the stores a list can belong to
+              stores: [],            // [{key, name, catalog, cart, linked_cart, prefix, approx_prices}] from /api/state
               store_key: 'kroger',   // the active list's store
               aldi_store: null,      // {store_name, address} or {error}, fetched once for Aldi lists
               aldi_account: null,    // {name, email, connected_at} once an aldi.us sign-in is pasted in
@@ -42,33 +42,57 @@ function banner(kind, text, html = false, el = $('banner')) {
 
 function money(n) { return `$${Number(n).toFixed(2)}`; }
 
-function priceHtml(p) {
+// approx: the store's prices are a typical figure across its stores (Meijer), shown as "about $2.96";
+// on sale, "about" goes on the sale price and the regular price is struck through as usual.
+function priceHtml(p, approx = false) {
+  const about = approx ? 'about ' : '';
   if (p.promo != null && p.price != null && Number(p.promo) < Number(p.price)) {
-    return `<span class="sale">${money(p.promo)}<s>${money(p.price)}</s></span>`;
+    return `<span class="sale">${about}${money(p.promo)}<s>${money(p.price)}</s></span>`;
   }
-  if (p.promo != null && p.price == null) return `<span class="sale">${money(p.promo)}</span>`;
-  if (p.price != null) return `<span class="price">${money(p.price)}</span>`;
+  if (p.promo != null && p.price == null) return `<span class="sale">${about}${money(p.promo)}</span>`;
+  if (p.price != null) return `<span class="price">${about}${money(p.price)}</span>`;
   return '';
 }
 
 function thumb(url) {
   return url ? `<img class="thumb" src="${esc(url)}" alt="" loading="lazy">` : `<div class="thumb placeholder"></div>`;
 }
+// A photo the store's site won't serve (meijer.com refuses some browsers) shows the placeholder, not a
+// broken-image icon. Error events don't bubble, so listen in the capture phase.
+document.addEventListener('error', (e) => {
+  const img = e.target;
+  if (img.tagName !== 'IMG' || !img.classList.contains('thumb')) return;
+  const box = document.createElement('div');
+  box.className = 'thumb placeholder';
+  img.replaceWith(box);
+}, true);
 
 // The active list's store. Kroger lists have a catalog and a cart; the others are hand-off lists:
 // plain item names, shopped on the store's own site through the "Open at <store>" panel.
 function providerOf(key) {
   return state.stores.find(s => s.key === key) || { key, name: key, catalog: key === 'kroger', cart: key === 'kroger' };
 }
-// Three kinds of list: Kroger (catalog and cart), Aldi (catalog, shopped on aldi.us), and plain
-// (Meijer, Walmart: names only). Every list without a cart is a hand-off list with Open at <store>.
+// Three kinds of list: Kroger (catalog and cart); a catalog store without Kroger's cart: Aldi (read from
+// aldi.us, its cart filled through a pasted sign-in) and Meijer (read through its search service, typical
+// "about" prices, cart still on meijer.com); and plain (Walmart: names only). Every list without a cart
+// is a hand-off list with Open at <store>.
 function isHandOff() { return !!state.active_list && !providerOf(state.store_key).cart; }
 // Aldi (v7.2): the user's own aldi.us cart, through a pasted sign-in. The list stays a hand-off list.
 function linkedCart() { return !!state.active_list && !!providerOf(state.store_key).linked_cart; }
 function hasCatalog() { return !!state.active_list && providerOf(state.store_key).catalog; }
 function isKroger() { return state.store_key === 'kroger'; }
-// A product from the active list's catalog: Kroger UPCs are digits, Aldi's are "aldi:" + digits.
-function isProduct(upc) { return isKroger() ? /^\d+$/.test(upc) : /^aldi:\d+$/.test(upc); }
+// A product from the active list's catalog: Kroger UPCs are digits, other stores' ids are the store's
+// prefix + digits ("aldi:123", "meijer:456"). A store without a prefix has no products.
+function isProduct(upc) {
+  if (isKroger()) return /^\d+$/.test(upc);
+  const prefix = providerOf(state.store_key).prefix;
+  const id = String(upc ?? '');
+  return !!prefix && id.startsWith(prefix) && /^\d+$/.test(id.slice(prefix.length));
+}
+// The active list's store shows typical prices rather than the user's store's (Meijer): "about $2.96".
+function approxPrices() { return !!state.active_list && !!providerOf(state.store_key).approx_prices; }
+// Where a catalog search looks, for messages: "your store" on Kroger lists, else the store's name.
+function searchWhere() { return isKroger() ? 'your store' : providerOf(state.store_key).name; }
 function canPrice() { return hasCatalog() && state.items.some(i => isProduct(i.upc)) && (!isKroger() || !!state.store); }
 
 // The "Add <name> as typed" choice a catalog without a cart offers next to its matches.
@@ -136,7 +160,10 @@ function render() {
     : isKroger() ? 'Search your store, e.g. whole milk' : `Search ${store.name}, e.g. whole milk`;
   $('search').textContent = catalog ? 'Search' : 'Add';
   const aldiStore = state.aldi_store;
+  const approx = approxPrices();
   $('store-label').textContent = isKroger() ? (state.store ? state.store.store_name : '')
+    : approx ? `Typical ${store.name} prices from ${store.name.toLowerCase()}.com's search; your store's may differ.`
+    : state.store_key !== 'aldi' ? `Shopping at ${store.name}`
     : !aldiStore ? `Shopping at ${store.name}, prices from aldi.us`
     : aldiStore.error ? `${store.name}: ${aldiStore.error}` : `Shopping at ${aldiStore.store_name}, prices from aldi.us`;
   $('change-store').classList.toggle('hidden', !isKroger());
@@ -147,7 +174,7 @@ function render() {
     : linkedCart() ? `This list is for ${store.name}: search its catalog above, or add anything by name. Tick what you need, then Send to ${store.name} cart; items added as typed are shopped with Open at ${store.name}.`
     : catalog ? `This list is for ${store.name}: search its catalog above, or add anything by name. Tick what you need, then Open at ${store.name}.`
     : `This list is for ${store.name}: items are plain names. Tick what you need, then Open at ${store.name}.`;
-  if (catalog && !isKroger() && !state.aldi_store) loadAldiStore();
+  if (catalog && state.store_key === 'aldi' && !state.aldi_store) loadAldiStore();
   $('push').classList.toggle('hidden', handOff);
   $('push').disabled = !setupDone || !anyChecked;
   $('open-store').classList.toggle('hidden', !handOff);
@@ -194,7 +221,7 @@ function render() {
     li.innerHTML = `
       <input type="checkbox" ${item.included ? 'checked' : ''} data-idx="${idx}" data-field="included">
       ${catalog ? thumb(item.image) : ''}
-      <div class="name"><div>${esc(item.name)}</div>${catalog && (item.size || item.price != null || item.promo != null) ? `<div class="size">${esc(item.size)} ${priceHtml(item)}</div>` : ''}</div>
+      <div class="name"><div>${esc(item.name)}</div>${catalog && (item.size || item.price != null || item.promo != null) ? `<div class="size">${esc(item.size)} ${priceHtml(item, approx)}</div>` : ''}</div>
       <input type="number" min="1" value="${item.quantity}" data-idx="${idx}" data-field="quantity">
       <button class="danger" data-remove="${esc(item.upc)}" title="Remove">&#x2715;</button>`;
     ul.appendChild(li);
@@ -329,7 +356,7 @@ async function search() {
     results.forEach(r => {
       const li = document.createElement('li');
       const stock = r.in_stock === false ? ' · out of stock' : '';
-      li.innerHTML = `${thumb(r.image)}<div class="name"><div>${esc(r.name)}</div><div class="size">${esc(r.size)}${stock}</div></div>${priceHtml(r)}`;
+      li.innerHTML = `${thumb(r.image)}<div class="name"><div>${esc(r.name)}</div><div class="size">${esc(r.size)}${stock}</div></div>${priceHtml(r, approxPrices())}`;
       li.onclick = async () => {
         try {
           const data = await api('POST', listPath('/items'),
@@ -340,7 +367,7 @@ async function search() {
       ul.appendChild(li);
     });
     if (isHandOff()) offerAsTyped();
-    if (!results.length) banner('warn', `No matches for "${term}" at ${isKroger() ? 'your store' : providerOf(state.store_key).name}.`);
+    if (!results.length) banner('warn', `No matches for "${term}" at ${searchWhere()}.`);
   } catch (e) {
     if (!isHandOff()) { banner('error', e.message); return; }
     ul.innerHTML = '';
@@ -565,16 +592,17 @@ $('import-text').oninput = () => { importRows = []; $('import-review').classList
 
 // Match parsed lines against the store catalog and show the review table.
 // On a Kroger list, rows with a UPC (an exported CSV) are exact products; only the rest are searched.
-// An Aldi list searches every line (a file's UPCs are Kroger's) and offers "as typed" next to the
-// matches; if aldi.us can't be read, the rows fall back to plain names. A plain list has no catalog:
-// every line is offered as typed, to add or skip.
+// Another catalog store's list (Aldi, Meijer) searches every line (a file's UPCs are Kroger's) and
+// offers "as typed" next to the matches; if the store's catalog can't be read (aldi.us, Meijer's search
+// service), the rows fall back to plain names. Meijer's matches show typical "about" prices. A plain
+// list (Walmart) has no catalog: every line is offered as typed, to add or skip.
 async function reviewLines(lines, bannerEl) {
   const kroger = isKroger();
   let plain = !hasCatalog(), fallback = null;
   const toResolve = plain ? [] : lines.filter(l => !(kroger && l.exact));
   let matches = [];
   if (toResolve.length) {
-    banner('warn', `Looking up ${plural(toResolve.length, 'item')} at ${kroger ? 'your store' : providerOf(state.store_key).name}…`, false, bannerEl);
+    banner('warn', `Looking up ${plural(toResolve.length, 'item')} at ${searchWhere()}…`, false, bannerEl);
     try {
       matches = await resolveNames(toResolve.map(l => l.name));
     } catch (e) {
@@ -633,8 +661,9 @@ function renderRow(idx) {
   // transparency, not bought by default; one pick adds them anyway.
   const skip = !row.searched && ['staple', 'on_list', 'stocked'].includes(row.kind);
   const plain = importPlain;
+  const about = approxPrices() ? 'about ' : '';
   const options = row.candidates.map((c, ci) =>
-    `<option value="${ci}" ${ci === 0 && !skip ? 'selected' : ''}>${c.asTyped ? (plain ? `Add ${esc(c.name)}` : `Add “${esc(c.name)}” as typed`) : `${c.fromFile ? 'From file: ' : ''}${esc(c.name)}${c.size ? ' · ' + esc(c.size) : ''}${c.price != null || c.promo != null ? ' · ' + money(c.promo ?? c.price) : ''}`}</option>`
+    `<option value="${ci}" ${ci === 0 && !skip ? 'selected' : ''}>${c.asTyped ? (plain ? `Add ${esc(c.name)}` : `Add “${esc(c.name)}” as typed`) : `${c.fromFile ? 'From file: ' : ''}${esc(c.name)}${c.size ? ' · ' + esc(c.size) : ''}${c.price != null || c.promo != null ? ' · ' + about + money(c.promo ?? c.price) : ''}`}</option>`
   ).join('');
   const kind = row.kind ? `<span class="kind ${esc(row.kind)}">${esc(row.kind.replace('_', ' '))}</span>` : '';
   const sub = row.kind ? (row.reason || '') : row.raw;
@@ -708,8 +737,7 @@ async function runRowSearch(idx) {
     row.searched = true;  // the user chose this match on purpose, so it starts on add whatever the kind
     $('import-table').querySelector(`[data-import-row="${idx}"]`).replaceWith(renderRow(idx));
     const found = row.candidates.some(c => !c.asTyped);
-    const where = isKroger() ? 'your store' : providerOf(state.store_key).name;
-    banner(found ? null : 'warn', found ? '' : `No match for “${term}” at ${where}.`, false, $('import-banner'));
+    banner(found ? null : 'warn', found ? '' : `No match for “${term}” at ${searchWhere()}.`, false, $('import-banner'));
     updateImportSummary();
   } catch (e) {
     input.disabled = button.disabled = false;
@@ -876,7 +904,7 @@ $('photo-go').onclick = async () => {
     if (slug !== state.active_list) await switchList(slug);
     $('photo-dialog').close();
     openImport();
-    banner('warn', `Claude suggested ${plural(lines.length, 'item')}.${hasCatalog() ? ' Matching them to your store…' : ''}`, false, $('import-banner'));
+    banner('warn', `Claude suggested ${plural(lines.length, 'item')}.${hasCatalog() ? ` Matching them to ${searchWhere()}…` : ''}`, false, $('import-banner'));
     await reviewLines(lines, $('import-banner'));
   } catch (err) {
     banner('error', err.message, false, $('photo-dialog').open ? pbanner : $('import-banner'));
@@ -915,7 +943,7 @@ $('recipe-go').onclick = async () => {
     if (slug !== state.active_list) await switchList(slug);
     $('recipe-dialog').close();
     openImport();
-    banner('warn', `Claude suggested ${plural(lines.length, 'item')} for “${title || 'the recipe'}”.${hasCatalog() ? ' Matching them to your store…' : ''}`, false, $('import-banner'));
+    banner('warn', `Claude suggested ${plural(lines.length, 'item')} for “${title || 'the recipe'}”.${hasCatalog() ? ` Matching them to ${searchWhere()}…` : ''}`, false, $('import-banner'));
     await reviewLines(lines, $('import-banner'));
   } catch (err) {
     banner('error', err.message, false, $('recipe-dialog').open ? rbanner : $('import-banner'));
