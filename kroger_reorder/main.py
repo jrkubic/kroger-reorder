@@ -37,7 +37,7 @@ from .vision import VisionError, analyze as analyze_photos
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 EXPORT_COLUMNS = ("upc", "name", "size", "quantity", "included", "price", "promo", "image")
 RESOLVE_CANDIDATES = 3
-ALDI_PARALLEL = 4  # aldi.us answers a search in about a second; a 30-line review should not take 30
+CATALOG_PARALLEL = 4  # Aldi and Meijer answer a search in about a second; a 30-line review should not take 30
 MAX_PHOTOS = 4
 MAX_PHOTO_BYTES = 6 * 1024 * 1024
 PHOTO_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
@@ -149,13 +149,15 @@ class OrderNotFound(Exception):
         self.order_id = order_id
 
 
-def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAULT_PHOTO_MODEL, photo_timeout: float = 90.0,
+def create_app(storage: Storage, kroger, *, aldi=None, meijer=None, photo_model: str = DEFAULT_PHOTO_MODEL,
+               photo_timeout: float = 90.0,
                analyzer=analyze_photos, page_fetcher=fetch_page, recipe_suggester=suggest_recipe,
                receipt_reader=read_receipt,
                photo_backend: str | None = None,
                public_url: str = "http://localhost:8000") -> FastAPI:
     """`kroger` is a KrogerClient or anything with the same methods (tests pass a fake). `aldi` is an
-    AldiClient or a fake; without one, Aldi lists work as plain lists.
+    AldiClient or a fake, `meijer` a MeijerClient or a fake; without its client, that store's lists work
+    as plain lists.
     `analyzer` has the signature of vision.analyze; tests pass a fake so nothing external is called.
     `page_fetcher(url) -> recipe.Page` and `recipe_suggester(...)` are the recipe equivalents of `analyzer`;
     `receipt_reader` has the signature of receipt.read.
@@ -237,7 +239,7 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         return {"name": session.get("name") or "", "email": session.get("email") or "",
                 "connected_at": session.get("connected_at")}
 
-    catalog_clients = {"aldi": aldi}   # the catalog client of each non-Kroger catalog store
+    catalog_clients = {"aldi": aldi, "meijer": meijer}   # each non-Kroger catalog store's client (None: plain)
 
     def has_catalog(p: Provider) -> bool:
         """A catalog store whose client is available. One without a client behaves as a plain store."""
@@ -247,7 +249,7 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         """Raises KrogerError / CatalogError; the caller has checked has_catalog and, for Kroger, the store."""
         if p.key == KROGER:
             return kroger.search_products(term, store_id())[:limit]
-        return aldi.search_products(term, limit=limit)
+        return catalog_clients[p.key].search_products(term, limit=limit)
 
     def no_catalog(p: Provider) -> JSONResponse:
         return error(400, f"{p.name} lists have no catalog; add items by name.")
@@ -392,7 +394,8 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         return {"store": store, "signed_in": kroger.is_signed_in(), "photo_backend": photo_backend,
                 "public_url": public_url,
                 "stores": [{"key": p.key, "name": p.name, "catalog": has_catalog(p), "cart": p.cart,
-                            "linked_cart": has_linked_cart(p)} for p in PROVIDERS.values()],
+                            "linked_cart": has_linked_cart(p), "prefix": p.product_prefix,
+                            "approx_prices": p.approx_prices} for p in PROVIDERS.values()],
                 "aldi_account": aldi_account(),
                 "kroger_cart": {"count": len(kroger_cart())},
                 **lists_payload()}
@@ -615,12 +618,13 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         return list_payload(get_list(slug), failed=len(loaded.items) - len(fresh_by_upc))
 
     def refresh_catalog_prices(slug: str, loaded: ListLoad):
-        """Aldi: one batched lookup for every catalog product on the list; plain items are left alone."""
+        """Aldi and Meijer: one batched lookup for every catalog product on the list; plain items are left
+        alone."""
         wanted = [i.upc for i in loaded.items if is_product(loaded.store, i.upc)]
         if not wanted:
             return list_payload(loaded, failed=0)
         try:
-            fresh_by_upc = aldi.lookup_products(wanted)
+            fresh_by_upc = catalog_clients[loaded.store].lookup_products(wanted)
         except CatalogError as exc:
             return error(502, f"Couldn't check prices: {exc.message}")
         now = utc_now()
@@ -889,7 +893,7 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         if p.key == KROGER:   # sequential, as always: Kroger's API is rate limited per app
             results = [lookup(name) for name in body.names]
         else:
-            with ThreadPoolExecutor(max_workers=ALDI_PARALLEL) as pool:
+            with ThreadPoolExecutor(max_workers=CATALOG_PARALLEL) as pool:
                 results = list(pool.map(lookup, body.names))  # map keeps the input order
         matches, failed, last_error = [], 0, None
         for name, (candidates, exc) in zip(body.names, results):
