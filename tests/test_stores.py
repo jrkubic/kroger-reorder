@@ -1,8 +1,9 @@
 # tests/test_stores.py
 import pytest
 
-from kroger_reorder.stores import (DEFAULT_STORE, PROVIDERS, UnknownStore, item_key, provider, search_link,
-                                   is_product, shop_link, store_names)
+from kroger_reorder.aldi import CHANGED, AldiError
+from kroger_reorder.stores import (DEFAULT_STORE, PROVIDERS, CatalogError, UnknownStore, item_key, provider,
+                                   search_link, is_product, shop_link, store_names)
 
 
 def test_kroger_is_the_default_and_the_only_catalog_store():
@@ -61,3 +62,9 @@ def test_item_key_is_a_name_slug():
 
 def test_store_names_for_messages():
     assert store_names() == "Kroger, Aldi, Meijer, or Walmart"
+
+
+def test_store_errors_share_a_base():
+    exc = AldiError(502, CHANGED)
+    assert isinstance(exc, CatalogError) and exc.unavailable
+    assert CatalogError(0, "Couldn't reach x").unavailable and not CatalogError(502, "HTTP 500").unavailable

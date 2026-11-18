@@ -28,6 +28,8 @@ from urllib.parse import unquote
 
 import httpx
 
+from .stores import CatalogError
+
 SITE = "https://www.aldi.us"
 SEARCH_PAGE = "/store/aldi/s"
 GRAPHQL = "/graphql"
@@ -55,18 +57,9 @@ _JSON_BLOB = re.compile(r'<script[^>]*type="application/json"[^>]*>(.*?)</script
 _PRICE = re.compile(r"\$\s*(\d{1,3}(?:,\d{3})*|\d+)(\.\d{1,2})?")
 
 
-class AldiError(Exception):
+class AldiError(CatalogError):
     """aldi.us could not be read. `status` 0 means it was never reached."""
-
-    def __init__(self, status: int, message: str) -> None:
-        super().__init__(message)
-        self.status = status
-        self.message = message
-
-    @property
-    def unavailable(self) -> bool:
-        """The whole catalog is out of reach (no network, or the site changed), not just one search."""
-        return self.status == 0 or self.message == CHANGED
+    changed_message = CHANGED
 
 
 @dataclass(frozen=True)

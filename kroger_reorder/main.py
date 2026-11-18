@@ -29,8 +29,8 @@ from .receipt import read as read_receipt
 from .recipe import extract as extract_recipe, fetch_page, suggest as suggest_recipe
 from .settings import DEFAULT_PHOTO_MODEL
 from .storage import DEFAULT_STORE, Item, ListLoad, Storage
-from .stores import (DEFAULT_STORE as KROGER, PROVIDERS, Provider, UnknownStore, is_product, item_key, provider,
-                     shop_link)
+from .stores import (DEFAULT_STORE as KROGER, PROVIDERS, CatalogError, Provider, UnknownStore, is_product, item_key,
+                     provider, shop_link)
 from .usage import profile_text, usage_profile
 from .vision import VisionError, analyze as analyze_photos
 
@@ -179,8 +179,8 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
     async def kroger_error(_: Request, exc: KrogerError):
         return error(502, kroger_message(exc))
 
-    @app.exception_handler(AldiError)
-    async def aldi_error(_: Request, exc: AldiError):
+    @app.exception_handler(CatalogError)
+    async def catalog_error(_: Request, exc: CatalogError):
         return error(502, exc.message)
 
     @app.exception_handler(UnknownStore)
@@ -242,7 +242,7 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         return p.catalog and (p.key == KROGER or aldi is not None)
 
     def catalog_search(p: Provider, term: str, limit: int = 10) -> list[dict]:
-        """Raises KrogerError / AldiError; the caller has checked has_catalog and, for Kroger, the store."""
+        """Raises KrogerError / CatalogError; the caller has checked has_catalog and, for Kroger, the store."""
         if p.key == KROGER:
             return kroger.search_products(term, store_id())[:limit]
         return aldi.search_products(term, limit=limit)
@@ -619,7 +619,7 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
             return list_payload(loaded, failed=0)
         try:
             fresh_by_upc = aldi.lookup_products(wanted)
-        except AldiError as exc:
+        except CatalogError as exc:
             return error(502, f"Couldn't check prices: {exc.message}")
         now = utc_now()
         current = get_list(slug)  # merge into the list as it is now, as the Kroger path does
@@ -870,14 +870,14 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
             return no_catalog(p)
         if p.key == KROGER and not store_id():
             return error(400, "Pick a store first.")
-        down: list[AldiError] = []   # once aldi.us is unreachable or changed, the other lookups won't fare better
+        down: list[CatalogError] = []   # once the store's catalog is down or changed, other lookups won't fare better
 
         def lookup(name: str):
             if down:
                 return [], down[0]
             try:
                 return catalog_search(p, name, RESOLVE_CANDIDATES), None
-            except AldiError as exc:
+            except CatalogError as exc:
                 if exc.unavailable:
                     down.append(exc)
                 return [], exc

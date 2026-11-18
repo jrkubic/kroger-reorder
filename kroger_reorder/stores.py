@@ -39,14 +39,28 @@ PROVIDERS: dict[str, Provider] = {p.key: p for p in (
 )}
 assert DEFAULT_STORE in PROVIDERS and PROVIDERS[DEFAULT_STORE].cart
 
-__all__ = ["DEFAULT_STORE", "PROVIDERS", "Provider", "UnknownStore", "item_key", "provider", "search_link",
-           "is_product", "shop_link", "store_names"]
+__all__ = ["DEFAULT_STORE", "PROVIDERS", "CatalogError", "Provider", "UnknownStore", "item_key", "provider",
+           "search_link", "is_product", "shop_link", "store_names"]
 
 
 def store_names() -> str:
     """'Kroger, Aldi, Meijer, or Walmart', for error messages."""
     names = [p.name for p in PROVIDERS.values()]
     return ", ".join(names[:-1]) + f", or {names[-1]}"
+
+
+class CatalogError(Exception):
+    """A catalog store's site or service failed. `status` 0 means it couldn't be reached."""
+    changed_message = ""   # each store's "site changed" message; that and status 0 mean the whole catalog is down
+
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status, self.message = status, message
+
+    @property
+    def unavailable(self) -> bool:
+        """The whole catalog is out of reach (no network, or the site changed), not just one search."""
+        return self.status == 0 or (bool(self.changed_message) and self.message == self.changed_message)
 
 
 class UnknownStore(Exception):
