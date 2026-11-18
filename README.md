@@ -559,6 +559,7 @@ Run once after setup, or after changes that touch the Kroger client:
 | v7.1 Aldi catalog | [docs/plans/2026-11-05-aldi-catalog-design.md](docs/plans/2026-11-05-aldi-catalog-design.md) | [docs/plans/2026-11-05-aldi-catalog.md](docs/plans/2026-11-05-aldi-catalog.md) |
 | v7.2 Aldi cart | [docs/plans/2026-11-06-aldi-cart-design.md](docs/plans/2026-11-06-aldi-cart-design.md) | [docs/plans/2026-11-06-aldi-cart.md](docs/plans/2026-11-06-aldi-cart.md) |
 | v7.3 Kroger cart awareness and receipts | [docs/plans/2026-11-06-kroger-cart-receipts-design.md](docs/plans/2026-11-06-kroger-cart-receipts-design.md) | [docs/plans/2026-11-06-kroger-cart-receipts.md](docs/plans/2026-11-06-kroger-cart-receipts.md) |
+| v7.4 Meijer catalog | [docs/plans/2026-11-18-meijer-catalog-design.md](docs/plans/2026-11-18-meijer-catalog-design.md) | [docs/plans/2026-11-18-meijer-catalog.md](docs/plans/2026-11-18-meijer-catalog.md) |
 
 ## Limitations
 
