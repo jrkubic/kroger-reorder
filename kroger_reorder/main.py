@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -395,7 +395,9 @@ def create_app(storage: Storage, kroger, *, aldi=None, meijer=None, photo_model:
                 "public_url": public_url,
                 "stores": [{"key": p.key, "name": p.name, "catalog": has_catalog(p), "cart": p.cart,
                             "linked_cart": has_linked_cart(p), "prefix": p.product_prefix,
-                            "approx_prices": p.approx_prices} for p in PROVIDERS.values()],
+                            "approx_prices": p.approx_prices,
+                            "site": urlparse(p.home_url).hostname.removeprefix("www.") if p.home_url else None}
+                           for p in PROVIDERS.values()],
                 "aldi_account": aldi_account(),
                 "kroger_cart": {"count": len(kroger_cart())},
                 **lists_payload()}

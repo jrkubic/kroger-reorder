@@ -6,7 +6,7 @@ const STALE_MS = 24 * 60 * 60 * 1000;
 
 let state = { store: null, signed_in: false, lists: [], active_list: null, name: '', items: [], warning: null,
               photo_backend: null, public_url: null,
-              stores: [],            // [{key, name, catalog, cart, linked_cart, prefix, approx_prices}] from /api/state
+              stores: [],            // [{key, name, catalog, cart, linked_cart, prefix, approx_prices, site}] from /api/state
               store_key: 'kroger',   // the active list's store
               aldi_store: null,      // {store_name, address} or {error}, fetched once for Aldi lists
               aldi_account: null,    // {name, email, connected_at} once an aldi.us sign-in is pasted in
@@ -67,8 +67,8 @@ document.addEventListener('error', (e) => {
   img.replaceWith(box);
 }, true);
 
-// The active list's store. Kroger lists have a catalog and a cart; the others are hand-off lists:
-// plain item names, shopped on the store's own site through the "Open at <store>" panel.
+// The active list's store. Kroger lists have a catalog and a cart; the others are hand-off lists, shopped
+// on the store's own site through the "Open at <store>" panel, with plain items allowed.
 function providerOf(key) {
   return state.stores.find(s => s.key === key) || { key, name: key, catalog: key === 'kroger', cart: key === 'kroger' };
 }
@@ -90,7 +90,7 @@ function isProduct(upc) {
   return !!prefix && id.startsWith(prefix) && /^\d+$/.test(id.slice(prefix.length));
 }
 // The active list's store shows typical prices rather than the user's store's (Meijer): "about $2.96".
-function approxPrices() { return !!state.active_list && !!providerOf(state.store_key).approx_prices; }
+function approxPrices() { return hasCatalog() && !!providerOf(state.store_key).approx_prices; }
 // Where a catalog search looks, for messages: "your store" on Kroger lists, else the store's name.
 function searchWhere() { return isKroger() ? 'your store' : providerOf(state.store_key).name; }
 function canPrice() { return hasCatalog() && state.items.some(i => isProduct(i.upc)) && (!isKroger() || !!state.store); }
@@ -162,10 +162,10 @@ function render() {
   const aldiStore = state.aldi_store;
   const approx = approxPrices();
   $('store-label').textContent = isKroger() ? (state.store ? state.store.store_name : '')
-    : approx ? `Typical ${store.name} prices from ${store.name.toLowerCase()}.com's search; your store's may differ.`
+    : approx ? `Typical ${store.name} prices from ${store.site}'s search; your store's may differ.`
     : state.store_key !== 'aldi' ? `Shopping at ${store.name}`
-    : !aldiStore ? `Shopping at ${store.name}, prices from aldi.us`
-    : aldiStore.error ? `${store.name}: ${aldiStore.error}` : `Shopping at ${aldiStore.store_name}, prices from aldi.us`;
+    : !aldiStore ? `Shopping at ${store.name}, prices from ${store.site}`
+    : aldiStore.error ? `${store.name}: ${aldiStore.error}` : `Shopping at ${aldiStore.store_name}, prices from ${store.site}`;
   $('change-store').classList.toggle('hidden', !isKroger());
   $('store-line').classList.toggle('hidden', !catalog);
   $('price-row').classList.toggle('hidden', !catalog);
@@ -617,7 +617,7 @@ async function reviewLines(lines, bannerEl) {
       ? { ...l, candidates: [{ ...l.exact, name: l.name, fromFile: true }] }
       : { ...l, exact: null, candidates: [...matches[next++].candidates, ...(kroger ? [] : [asTyped(l.name)])] }));
   importPlain = plain;
-  $('import-match-head').textContent = plain ? 'Add?' : kroger ? 'Match at your store' : `Match at ${providerOf(state.store_key).name}`;
+  $('import-match-head').textContent = plain ? 'Add?' : `Match at ${searchWhere()}`;
   banner(fallback ? 'warn' : null, fallback ? `${fallback} Showing your lines as plain items instead.` : '', false, bannerEl);
   renderImport();
 }

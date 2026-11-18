@@ -101,13 +101,13 @@ def test_initial_state_has_default_list(client):
         "photo_backend": None, "public_url": "http://localhost:8000",
         # No Aldi or Meijer client in this app: their lists are plain until one is configured.
         "stores": [{"key": "kroger", "name": "Kroger", "catalog": True, "cart": True, "linked_cart": False,
-                    "prefix": "", "approx_prices": False},
+                    "prefix": "", "approx_prices": False, "site": None},
                    {"key": "aldi", "name": "Aldi", "catalog": False, "cart": False, "linked_cart": False,
-                    "prefix": "aldi:", "approx_prices": False},
+                    "prefix": "aldi:", "approx_prices": False, "site": "aldi.us"},
                    {"key": "meijer", "name": "Meijer", "catalog": False, "cart": False, "linked_cart": False,
-                    "prefix": "meijer:", "approx_prices": True},
+                    "prefix": "meijer:", "approx_prices": True, "site": "meijer.com"},
                    {"key": "walmart", "name": "Walmart", "catalog": False, "cart": False, "linked_cart": False,
-                    "prefix": "", "approx_prices": False}],
+                    "prefix": "", "approx_prices": False, "site": "walmart.com"}],
         "aldi_account": None, "kroger_cart": {"count": 0},
     }
 
@@ -391,7 +391,7 @@ def aldi_list(aldi_client):
 def test_state_reports_aldi_catalog_when_configured(aldi_client):
     stores = {s["key"]: s for s in aldi_client.get("/api/state").json()["stores"]}
     assert stores["aldi"] == {"key": "aldi", "name": "Aldi", "catalog": True, "cart": False, "linked_cart": True,
-                              "prefix": "aldi:", "approx_prices": False}
+                              "prefix": "aldi:", "approx_prices": False, "site": "aldi.us"}
     assert stores["kroger"]["linked_cart"] is False
     assert aldi_client.get("/api/state").json()["aldi_account"] is None
 
@@ -549,7 +549,8 @@ def meijer_list(meijer_client):
 def test_state_reports_meijer_catalog_and_prefixes(meijer_client, client):
     stores = {s["key"]: s for s in meijer_client.get("/api/state").json()["stores"]}
     assert stores["meijer"] == {"key": "meijer", "name": "Meijer", "catalog": True, "cart": False,
-                                "linked_cart": False, "prefix": "meijer:", "approx_prices": True}
+                                "linked_cart": False, "prefix": "meijer:", "approx_prices": True,
+                                "site": "meijer.com"}
     assert (stores["kroger"]["prefix"], stores["kroger"]["approx_prices"]) == ("", False)
     assert (stores["walmart"]["catalog"], stores["walmart"]["prefix"]) == (False, "")
     plain = {s["key"]: s for s in client.get("/api/state").json()["stores"]}
