@@ -57,6 +57,10 @@ Or with Docker: `docker compose up -d`. Full details, including registering the 
 
 ![An Aldi list with catalog search results, prices, and plain items alongside](img/aldi.png)
 
+**Meijer lists search Meijer's catalog.** Results come from Meijer's product search with photos and sizes; prices are typical across Meijer stores, so they read "about".
+
+![A Meijer list searching for 2% milk, with photos and typical prices shown as about](img/meijer.png)
+
 **Shop an Aldi, Meijer or Walmart list on the store's site.** **Open at Aldi** links each item to its product page or a search, and copies the list as text.
 
 ![The Open at Aldi panel with a search link for each item and a Copy list button](img/handoff.png)
@@ -136,6 +140,7 @@ kroger-reorder/
 │       └── app.js         Page logic, talks to the JSON API
 ├── tests/                 pytest suite, one module per package module
 ├── docs/plans/            Design documents and implementation plans per version
+├── docs/screenshots/      Screenshots of each version's changes, linked from its pull request
 ├── scripts/
 │   ├── install-startup.ps1     Adds or removes the Windows startup entry
 │   └── install-start-menu.ps1  Adds or removes the Start Menu shortcut
