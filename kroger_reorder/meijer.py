@@ -1,3 +1,4 @@
+# kroger_reorder/meijer.py
 """Meijer catalog: search and product lookups through Meijer's search service.
 
 www.meijer.com answers plain HTTP clients with Akamai's "Access Denied", and this app does not imitate a
@@ -24,6 +25,8 @@ SEARCH_KEY = "key_GdYuTcnduTUtsZd6"   # the public key meijer.com's own pages se
 PREFIX = "meijer:"
 MAX_SIZE = 24        # longer tails after the last comma are part of the name
 LOOKUP_BATCH = 50    # ids per /browse/items request
+MAX_PAGE = 100       # results per request; also the longest search term sent
+SLACK = 5            # extra search results asked for, so dropped (unbuyable) ones don't shorten the answer
 CHANGED = "Meijer's search changed; Meijer lists work as plain lists until the app is updated."
 # Asks for every store's price (and sale price) of each result, grouped by unit, in the same answer.
 VARIATIONS = json.dumps({"group_by": [{"name": "unit", "field": "data.priceUnit"}], "dtype": "array",
@@ -55,6 +58,16 @@ def split_name(title: str, by_weight: bool = False, unit: str = "") -> tuple[str
     return name, size
 
 
+def _bad_key(response: httpx.Response) -> bool:
+    """Constructor answers a rotated or unknown key with HTTP 400 and
+    {"message": "You have supplied an invalid `key` ..."}; other 400s are about the request."""
+    try:
+        message = response.json().get("message")
+    except (ValueError, AttributeError):
+        return False
+    return isinstance(message, str) and "key" in message.lower()
+
+
 def _numbers(groups: list, key: str) -> list[float]:
     return [float(p) for g in groups if isinstance(g, dict) for p in g.get(key) or []
             if isinstance(p, (int, float)) and not isinstance(p, bool)]
@@ -64,7 +77,10 @@ def _prices(result: dict) -> tuple[float | None, float | None]:
     """(price, promo): the median store price, and the median sale price when it is lower. With no
     variations the listed price (whichever store's surfaced) stands in."""
     groups = result.get("variations_map")
-    groups = groups if isinstance(groups, list) else []
+    groups = [g for g in groups if isinstance(g, dict)] if isinstance(groups, list) else []
+    unit = (result.get("data") or {}).get("priceUnit")
+    same_unit = [g for g in groups if unit and g.get("unit") == unit]
+    groups = same_unit or groups          # a product sold in two units: the one its price is quoted in
     prices, sales = _numbers(groups, "prices"), _numbers(groups, "sale_prices")
     if not prices:
         listed = (result.get("data") or {}).get("price")
@@ -79,7 +95,8 @@ class MeijerClient:
     def __init__(self, *, transport: httpx.BaseTransport | None = None, search_key: str | None = None,
                  timeout: float = 15.0) -> None:
         self.key = search_key or SEARCH_KEY
-        # A jar that refuses every cookie: whatever the service sets is never sent back.
+        # One client for every request, also from the import's worker threads: httpx.Client and its
+        # CookieJar are thread-safe. The jar refuses every cookie: whatever the service sets is never sent back.
         jar = CookieJar(policy=DefaultCookiePolicy(allowed_domains=[]))
         self._http = httpx.Client(base_url=BASE, transport=transport, timeout=timeout, cookies=jar,
                                   headers={"Accept": "application/json"})
@@ -89,8 +106,8 @@ class MeijerClient:
             response = self._http.get(path, params=_params(self.key, **params))
         except httpx.HTTPError as exc:
             raise MeijerError(0, f"Couldn't reach Meijer's search: {exc.__class__.__name__}") from exc
-        if response.status_code in (400, 401, 403):
-            raise MeijerError(502, CHANGED)       # a rotated key is a 400 ("invalid `key`"); a bad request too
+        if response.status_code in (401, 403) or (response.status_code == 400 and _bad_key(response)):
+            raise MeijerError(502, CHANGED)       # the public key was rotated
         if response.status_code >= 400:
             raise MeijerError(502, f"Meijer's search said HTTP {response.status_code}.")
         try:
@@ -117,7 +134,11 @@ class MeijerClient:
 
     # -- the product surface the routes use (mirrors KrogerClient and AldiClient) ---------------
     def search_products(self, term: str, limit: int = 10) -> list[dict]:
-        results = self._get(f"/search/{quote(term, safe='')}", num_results_per_page=limit)
+        term = " ".join(term.split())[:MAX_PAGE]
+        if not any(c.isalnum() for c in term):
+            return []                       # nothing to search for ("", ".", "#?&")
+        limit = max(1, min(limit, MAX_PAGE))
+        results = self._get(f"/search/{quote(term, safe='')}", num_results_per_page=min(limit + SLACK, MAX_PAGE))
         return [p for p in map(self._summarize, results) if p][:limit]
 
     def lookup_products(self, upcs: list[str]) -> dict[str, dict]:

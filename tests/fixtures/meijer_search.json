@@ -88,6 +88,28 @@
       "sale_prices": [1.69, 2.39, 2.49, 2.59, 2.99]
      }
     ]
+   },
+   {
+    "value": "Meijer 1% Lowfat Milk, Gallon",
+    "data": {
+     "id": "4125010268",
+     "image_url": "https://www.meijer.com/content/dam/meijer/product/0041/25/0102/68/0041250102687_2_A1C1_0200.jpg",
+     "price": 2.94,
+     "discountSalePriceValue": 2.94,
+     "sale": false,
+     "stockLevelStatus": "inStock",
+     "priceByWeight": false,
+     "priceUnit": "EA",
+     "isPurchasable": true,
+     "deactivated": false
+    },
+    "variations_map": [
+     {
+      "unit": "EA",
+      "prices": [2.94, 2.89, 3.09, 3.09, 2.68],
+      "sale_prices": [2.94, 2.89, 3.09, 3.09, 2.68]
+     }
+    ]
    }
   ]
  }

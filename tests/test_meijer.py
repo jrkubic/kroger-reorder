@@ -9,8 +9,8 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 
-from kroger_reorder.meijer import (CHANGED, LOOKUP_BATCH, SEARCH_KEY, VARIATIONS, MeijerClient, MeijerError,
-                                   is_product, split_name)
+from kroger_reorder.meijer import (CHANGED, LOOKUP_BATCH, MAX_PAGE, SEARCH_KEY, SLACK, VARIATIONS, MeijerClient,
+                                   MeijerError, is_product, split_name)
 from kroger_reorder.stores import CatalogError
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -36,7 +36,8 @@ class FakeService:
                 raise answer
             return answer
         if url.path.startswith("/search/"):
-            return httpx.Response(200, json=self.search)
+            per_page = int(parse_qs(url.query).get("num_results_per_page", ["20"])[0])
+            return httpx.Response(200, json={"response": {"results": self.search["response"]["results"][:per_page]}})
         if url.path == "/browse/items":
             wanted = parse_qs(url.query).get("ids", [])
             by_id = {r["data"]["id"]: r for r in self.items["response"]["results"]}
@@ -73,18 +74,41 @@ def test_search_returns_products_in_order(client, service):
     assert str(request.url).startswith("https://ac.cnstrc.com/search/milk?")
     assert path == "/search/milk"
     assert query["key"] == [SEARCH_KEY]
-    assert query["num_results_per_page"] == ["3"]
+    assert query["num_results_per_page"] == [str(3 + SLACK)]   # room for dropped results
     assert json.loads(query["variations_map"][0]) == json.loads(VARIATIONS)
 
 
 def test_search_term_is_one_encoded_path_segment(client, service):
     client.search_products("2% milk")
     client.search_products("milk/eggs")
-    assert service.paths() == ["/search/2%25%20milk", "/search/milk%2Feggs"]
+    client.search_products("mac & cheese?")
+    assert service.paths() == ["/search/2%25%20milk", "/search/milk%2Feggs", "/search/mac%20%26%20cheese%3F"]
 
 
-def test_search_honours_limit(client):
+def test_search_honours_limit(client, service):
     assert [r["upc"] for r in client.search_products("milk", limit=1)] == ["meijer:4125010200"]
+    assert len(client.search_products("milk", limit=4)) == 4
+    client.search_products("milk", limit=500)
+    client.search_products("milk", limit=0)
+    assert [q["num_results_per_page"] for _, _, q in service.calls[-2:]] == [[str(MAX_PAGE)], [str(1 + SLACK)]]
+
+
+def test_search_asks_for_slack_so_a_dropped_hit_does_not_shorten_the_answer(client, service):
+    # The third hit is unbuyable: asking for exactly three would return two.
+    results = client.search_products("milk", limit=3)
+    assert [r["upc"] for r in results] == ["meijer:4125010200", "meijer:4125010210", "meijer:4125010211"]
+
+
+@pytest.mark.parametrize("term", ["", " ", ".", "..", "#?&", " - "])
+def test_a_term_without_letters_or_digits_sends_nothing(client, service, term):
+    assert client.search_products(term) == []
+    assert service.calls == []
+
+
+def test_search_term_is_normalised(client, service):
+    client.search_products("  2%   milk\t\n")
+    client.search_products("a" * 300)
+    assert service.paths() == ["/search/2%25%20milk", "/search/" + "a" * MAX_PAGE]
 
 
 def test_price_is_the_median_store_price(client):
@@ -99,6 +123,16 @@ def test_promo_is_the_median_sale_price_when_lower(client):
     assert (milk["price"], milk["promo"]) == (3.09, 2.54)  # on sale at four of six stores
     # Not on sale: the service repeats the price as the "sale" price, which is not a promo.
     assert (found["meijer:4011"]["price"], found["meijer:4011"]["promo"]) == (0.28, None)
+
+
+def test_price_uses_the_variations_in_the_listed_unit(client, service):
+    ham = service.items["response"]["results"][2]          # priceUnit LB
+    ham["variations_map"].insert(0, {"unit": "EA", "prices": [1.0] * 5, "sale_prices": [0.5] * 5})
+    found = client.lookup_products(["meijer:21180600000"])["meijer:21180600000"]
+    assert (found["price"], found["promo"]) == (10.99, None)
+    ham["data"]["priceUnit"] = "KG"                        # no group in that unit: every group counts
+    found = client.lookup_products(["meijer:21180600000"])["meijer:21180600000"]
+    assert (found["price"], found["promo"]) == (1.0, 0.5)
 
 
 def test_without_variations_the_listed_price_stands_in(client, service):
@@ -138,7 +172,7 @@ def test_unbuyable_results_are_dropped(client, service):
     results[0]["data"]["deactivated"] = True
     results[1]["data"]["id"] = "not-a-number"
     results.append("junk")
-    assert [r["upc"] for r in client.search_products("milk")] == ["meijer:4125010211"]
+    assert [r["upc"] for r in client.search_products("milk")] == ["meijer:4125010211", "meijer:4125010268"]
 
 
 def test_out_of_stock_is_flagged(client):
@@ -170,26 +204,37 @@ def test_lookup_of_many_products_is_split_into_requests(client, service):
     assert sizes == [LOOKUP_BATCH, 3]
 
 
-@pytest.mark.parametrize("answer, status, message", [
-    (httpx.ConnectError("boom"), 0, "Couldn't reach Meijer's search: ConnectError"),
-    (httpx.ReadTimeout("slow"), 0, "Couldn't reach Meijer's search: ReadTimeout"),
-    (httpx.Response(500, text="oops"), 502, "Meijer's search said HTTP 500."),
-    (httpx.Response(400, json={"message": "You have supplied an invalid `key` or `autocomplete_key`."}),
-     502, CHANGED),
-    (httpx.Response(401, json={}), 502, CHANGED),
-    (httpx.Response(403, json={}), 502, CHANGED),
-    (httpx.Response(200, json={"response": {}}), 502, CHANGED),
-    (httpx.Response(200, json={"response": {"results": {}}}), 502, CHANGED),
-    (httpx.Response(200, json=[]), 502, CHANGED),
-    (httpx.Response(200, text="<html>Access Denied</html>"), 502, CHANGED),
+HTTP_400 = "Meijer's search said HTTP 400."
+
+
+@pytest.mark.parametrize("answer, status, message, unavailable", [
+    (httpx.ConnectError("boom"), 0, "Couldn't reach Meijer's search: ConnectError", True),
+    (httpx.ReadTimeout("slow"), 0, "Couldn't reach Meijer's search: ReadTimeout", True),
+    (httpx.Response(500, text="oops"), 502, "Meijer's search said HTTP 500.", False),
+    (httpx.Response(429, json={}), 502, "Meijer's search said HTTP 429.", False),
+    # What Constructor really answers for an unknown key:
+    (httpx.Response(400, json={"message": "You have supplied an invalid `key` or `autocomplete_key`. You can "
+                                          "find your key at app.constructor.io/dashboard/accounts/api_integration."}),
+     502, CHANGED, True),
+    (httpx.Response(400, json={"message": "Invalid KEY"}), 502, CHANGED, True),
+    (httpx.Response(400, json={"message": "num_results_per_page must be at most 200"}), 502, HTTP_400, False),
+    (httpx.Response(400, json=["key"]), 502, HTTP_400, False),
+    (httpx.Response(400, text="Bad Request"), 502, HTTP_400, False),
+    (httpx.Response(400), 502, HTTP_400, False),
+    (httpx.Response(401, json={}), 502, CHANGED, True),
+    (httpx.Response(403, json={}), 502, CHANGED, True),
+    (httpx.Response(200, json={"response": {}}), 502, CHANGED, True),
+    (httpx.Response(200, json={"response": {"results": {}}}), 502, CHANGED, True),
+    (httpx.Response(200, json=[]), 502, CHANGED, True),
+    (httpx.Response(200, text="<html>Access Denied</html>"), 502, CHANGED, True),
 ])
-def test_errors(client, service, answer, status, message):
+def test_errors(client, service, answer, status, message, unavailable):
     service.overrides.append(answer)
     with pytest.raises(MeijerError) as err:
         client.search_products("milk")
     assert (err.value.status, err.value.message) == (status, message)
     assert isinstance(err.value, CatalogError)
-    assert err.value.unavailable is (message != "Meijer's search said HTTP 500.")
+    assert err.value.unavailable is unavailable
 
 
 def test_lookup_errors_raise_too(client, service):

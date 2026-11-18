@@ -54,8 +54,13 @@ meijer.com for now; Jake chose "catalog now, cart later".
    the base of `AldiError` and the new `MeijerError`; `main.py` handles and catches `CatalogError`
    where it caught `AldiError` (502 handler, import resolve, price refresh). Messages:
    transport → `Couldn't reach Meijer's search: <detail>`; HTTP error →
-   `Meijer's search said HTTP <n>.`; a rejected key (HTTP 401/403) or an unexpected shape →
-   `Meijer's search changed; Meijer lists work as plain lists until the app is updated.`
+   `Meijer's search said HTTP <n>.`; a rejected key (HTTP 401/403, or a 400 whose message names the
+   key, which is what Constructor answers for an unknown key) or an unexpected shape →
+   `Meijer's search changed; Meijer lists work as plain lists until the app is updated.` Only that
+   message and an unreachable service make the whole catalog unavailable; any other 400 is one bad
+   search. A search term is normalised first (whitespace collapsed, cut to 100 characters); one with
+   no letter or digit returns no results without a request. Search asks for five more results than
+   wanted (at most 100), so dropped unbuyable ones don't shorten the answer.
 3. **Providers.** Meijer gets `catalog=True`, `product_prefix="meijer:"`, `cart=False` and a new
    `approx_prices=True`; `product_url` stays unset, so Open at Meijer searches meijer.com for the
    matched product's name. `/api/state` reports `prefix` and `approx_prices` per store.
