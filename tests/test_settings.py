@@ -79,3 +79,9 @@ def test_anthropic_api_key_is_optional_and_stripped():
     assert load_settings(env=BASE).anthropic_api_key is None
     assert load_settings(env={**BASE, "ANTHROPIC_API_KEY": "  "}).anthropic_api_key is None
     assert load_settings(env={**BASE, "ANTHROPIC_API_KEY": " sk-x "}).anthropic_api_key == "sk-x"
+
+
+def test_meijer_search_key_is_optional_and_stripped():
+    assert load_settings(env=BASE).meijer_search_key is None
+    assert load_settings(env={**BASE, "MEIJER_SEARCH_KEY": "  "}).meijer_search_key is None
+    assert load_settings(env={**BASE, "MEIJER_SEARCH_KEY": "key_x"}).meijer_search_key == "key_x"

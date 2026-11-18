@@ -237,9 +237,11 @@ def create_app(storage: Storage, kroger, *, aldi=None, photo_model: str = DEFAUL
         return {"name": session.get("name") or "", "email": session.get("email") or "",
                 "connected_at": session.get("connected_at")}
 
+    catalog_clients = {"aldi": aldi}   # the catalog client of each non-Kroger catalog store
+
     def has_catalog(p: Provider) -> bool:
-        """A catalog store whose client is available. Aldi without a client behaves as a plain store."""
-        return p.catalog and (p.key == KROGER or aldi is not None)
+        """A catalog store whose client is available. One without a client behaves as a plain store."""
+        return p.catalog and (p.key == KROGER or catalog_clients.get(p.key) is not None)
 
     def catalog_search(p: Provider, term: str, limit: int = 10) -> list[dict]:
         """Raises KrogerError / CatalogError; the caller has checked has_catalog and, for Kroger, the store."""

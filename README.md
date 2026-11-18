@@ -235,6 +235,7 @@ All settings live in `.env` (or the process environment, which wins). Only the f
 | `PHOTO_MODEL` | `claude-opus-5-5` | Model used for photo and recipe suggestions by either backend. |
 | `PHOTO_TIMEOUT` | `90` | Seconds to wait for a photo analysis or recipe suggestion. |
 | `ALDI_SEARCH_HASH`, `ALDI_ITEMS_HASH`, `ALDI_LOCATION_HASH` | built in | Replacement request hashes for aldi.us after Instacart changes its site. Leave unset unless Aldi search says the site changed; see [Troubleshooting](#troubleshooting). |
+| `MEIJER_SEARCH_KEY` | built in | Replacement public key for Meijer's search service (Constructor.io) after meijer.com changes it. Leave unset unless Meijer search says it changed; see [Troubleshooting](#troubleshooting). |
 
 The server prints the data folder and the active Claude backend (the "Claude:" line) when it starts, so you can confirm what it picked up.
 
