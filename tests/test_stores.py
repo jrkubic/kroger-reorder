@@ -6,7 +6,7 @@ from kroger_reorder.stores import (DEFAULT_STORE, PROVIDERS, CatalogError, Unkno
                                    search_link, is_product, shop_link, store_names)
 
 
-def test_kroger_is_the_default_and_the_only_catalog_store():
+def test_kroger_is_the_default_and_the_only_cart_store():
     assert DEFAULT_STORE == "kroger"
     assert [k for k, p in PROVIDERS.items() if p.cart] == ["kroger"]
     assert [k for k, p in PROVIDERS.items() if p.catalog] == ["kroger", "aldi", "meijer"]
@@ -44,7 +44,8 @@ def test_meijer_products_carry_the_meijer_prefix():
 
 def test_meijer_products_open_a_meijer_search_for_the_name():
     # meijer.com product URLs couldn't be verified, so a matched product still opens a search.
-    assert shop_link("meijer", "meijer:4125010210", "Meijer 2% Milk") ==         "https://www.meijer.com/shopping/search.html?text=Meijer%202%25%20Milk"
+    assert shop_link("meijer", "meijer:4125010210", "Meijer 2% Milk") == (
+        "https://www.meijer.com/shopping/search.html?text=Meijer%202%25%20Milk")
 
 
 def test_only_meijer_prices_are_approximate():

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from kroger_reorder.aldi import CHANGED, SIGNED_OUT, AldiError, CartResult
 from kroger_reorder.kroger import KrogerError, NotSignedIn
-from kroger_reorder.main import create_app
+from kroger_reorder.main import CATALOG_PARALLEL, create_app
 from kroger_reorder.meijer import CHANGED as MEIJER_CHANGED, MeijerError
 from kroger_reorder.recipe import Extracted, Page, RecipeError
 from kroger_reorder.storage import Item, Storage
@@ -630,6 +630,15 @@ def test_meijer_down_falls_back(meijer_client, meijer_list, fake_meijer):
     # Typed items still go on the list while the catalog is down.
     r = meijer_client.post(f"/api/lists/{meijer_list}/items", json={"name": "Eggs"})
     assert r.status_code == 200 and r.json()["items"][0]["upc"] == "eggs"
+
+
+def test_meijer_resolve_stops_early_once_the_search_changed(meijer_client, fake_meijer):
+    fake_meijer.error = MeijerError(502, MEIJER_CHANGED)
+    names = [f"item {n}" for n in range(12)]
+    r = meijer_client.post("/api/import/resolve", json={"names": names, "store": "meijer"})
+    assert r.status_code == 502 and r.json()["error"] == f"Couldn't look up any items: {MEIJER_CHANGED}"
+    # Each worker searches at most once before the first failure marks the catalog down; the rest skip.
+    assert len(fake_meijer.searches) <= CATALOG_PARALLEL < len(names)
 
 
 def test_meijer_list_hands_off_with_search_links(meijer_client, meijer_list):

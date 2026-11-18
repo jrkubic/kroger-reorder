@@ -583,7 +583,7 @@ def create_app(storage: Storage, kroger, *, aldi=None, meijer=None, photo_model:
         if not has_catalog(p):
             return hand_off_refused(p)
         if p.key != KROGER:
-            return refresh_catalog_prices(slug, loaded)
+            return refresh_catalog_prices(slug, loaded, p)
         sid = store_id()
         if not sid:
             return error(400, "Pick a store first.")
@@ -617,14 +617,14 @@ def create_app(storage: Storage, kroger, *, aldi=None, meijer=None, photo_model:
         # `failed` is the number of items we set out to check and couldn't, including any skipped after bailing out.
         return list_payload(get_list(slug), failed=len(loaded.items) - len(fresh_by_upc))
 
-    def refresh_catalog_prices(slug: str, loaded: ListLoad):
+    def refresh_catalog_prices(slug: str, loaded: ListLoad, p: Provider):
         """Aldi and Meijer: one batched lookup for every catalog product on the list; plain items are left
         alone."""
-        wanted = [i.upc for i in loaded.items if is_product(loaded.store, i.upc)]
+        wanted = [i.upc for i in loaded.items if is_product(p.key, i.upc)]
         if not wanted:
             return list_payload(loaded, failed=0)
         try:
-            fresh_by_upc = catalog_clients[loaded.store].lookup_products(wanted)
+            fresh_by_upc = catalog_clients[p.key].lookup_products(wanted)
         except CatalogError as exc:
             return error(502, f"Couldn't check prices: {exc.message}")
         now = utc_now()
