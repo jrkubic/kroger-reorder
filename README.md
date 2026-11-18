@@ -119,6 +119,7 @@ kroger-reorder/
 │   ├── main.py            FastAPI app factory and every HTTP route
 │   ├── kroger.py          Kroger API client: OAuth, locations, products, cart
 │   ├── aldi.py            Aldi US client: search, product lookups, store, and your signed-in cart
+│   ├── meijer.py          Meijer catalog client: search and product lookups through Meijer's search service
 │   ├── storage.py         JSON persistence: lists, config, tokens, Aldi sign-in, order history
 │   ├── stores.py          The stores a list can belong to: Kroger (catalog, cart), Aldi (catalog, linked cart), hand-off stores
 │   ├── orders.py          Order snapshots, what is in the Kroger cart, checkout, receipt outcomes
