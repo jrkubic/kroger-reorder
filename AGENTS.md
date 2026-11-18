@@ -31,8 +31,9 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
 | `kroger_reorder/main.py` | FastAPI app factory `create_app()` and every HTTP route |
 | `kroger_reorder/kroger.py` | Kroger API client: OAuth, locations, products, cart |
 | `kroger_reorder/aldi.py` | Aldi US client: replays aldi.us's own GraphQL calls (search, items, store) and fills the signed-in cart (`account`, `fill_cart`) |
+| `kroger_reorder/meijer.py` | Meijer catalog client: search and product lookups through Meijer's Constructor.io search service (`ac.cnstrc.com`), typical prices as the median across stores |
 | `kroger_reorder/storage.py` | JSON persistence; `Storage(data_dir)` is the only way in |
-| `kroger_reorder/stores.py` | The stores a list can belong to: Kroger (catalog, cart), Aldi (catalog, linked cart) and the hand-off stores Meijer, Walmart (search links) |
+| `kroger_reorder/stores.py` | The stores a list can belong to: Kroger (catalog, cart), Aldi (catalog, linked cart), Meijer (catalog, approximate prices), Walmart (search links only); `CatalogError`, the base of `AldiError` and `MeijerError` |
 | `kroger_reorder/settings.py` | `.env` / environment parsing; every setting has a default here |
 | `kroger_reorder/vision.py` | Shared Claude call (`complete()`: Anthropic SDK or Claude Code CLI) and photo suggestions |
 | `kroger_reorder/recipe.py` | Recipe URL suggestions: fetch, JSON-LD extraction, prompt; shares `vision.complete()` |
@@ -75,8 +76,8 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
 
 - `Storage(data_dir)` is required; the `./data` default lives in `settings.DEFAULT_DATA_DIR` and is
   relative to the working directory. The Windows shortcuts set the working directory to the checkout.
-- `create_app()` takes everything injectable (`storage`, `kroger`, `analyzer`, `photo_backend`,
-  `public_url`). Tests build it with fakes; never read `.env` inside a route.
+- `create_app()` takes everything injectable (`storage`, `kroger`, `aldi`, `meijer`, `analyzer`,
+  `photo_backend`, `public_url`). Tests build it with fakes; never read `.env` inside a route.
 - User-facing error strings are part of the contract: the README Troubleshooting table quotes them.
   Change one, change both.
 - The page is served with `Cache-Control: no-cache` and a version-stamped script URL. Do not add a
@@ -86,17 +87,25 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
   given.
 - `recipe.fetch_page()` must never hit the network in tests: pass `transport=` an `httpx.MockTransport`.
 - Every list has a `store` (`stores.PROVIDERS` key; missing in the file means Kroger). Each provider has
-  `catalog` (search, matching, prices) and `cart` (Send to cart) flags: Kroger both, Aldi catalog only,
-  Meijer and Walmart neither. Routes use `has_catalog(p)` (catalog flag and a client available) and
-  `p.cart`. Plain items are allowed on every list without a cart and are keyed by `stores.item_key(name)`
-  in the `upc` field; catalog products keep their numeric id there, which is why `importer._exact` only
-  treats an all-digit `upc` as a product.
+  `catalog` (search, matching, prices) and `cart` (Send to cart) flags: Kroger both, Aldi and Meijer
+  catalog only (Meijer with `approx_prices`), Walmart neither. Routes use `has_catalog(p)` (catalog flag
+  and a client available; the clients are `catalog_clients` by store key) and `p.cart`. Plain items are
+  allowed on every list without a cart and are keyed by `stores.item_key(name)` in the `upc` field;
+  Kroger products keep their numeric UPC there and Aldi and Meijer products their `product_prefix` plus
+  id (`aldi:…`, `meijer:…`), which is why `importer._exact` only treats an all-digit `upc` as a product.
 - `aldi.AldiClient` must never hit the network in tests: pass `transport=` an `httpx.MockTransport`
   (see `tests/test_aldi.py`, which serves trimmed real responses from `tests/fixtures/aldi_*`). Every
   failure is an `AldiError`; the page falls back to plain rows on Aldi lists. When aldi.us changes, the
   persisted-query hashes are the usual culprit: update `SEARCH_HASH` / `ITEMS_HASH` / `LOCATION_HASH`
   (users can override them with `ALDI_*_HASH` in `.env`), refresh the fixtures, and check
   `parse_context` still finds the store context in the search page.
+- `meijer.MeijerClient` must never hit the network in tests: pass `transport=` an `httpx.MockTransport`
+  (see `tests/test_meijer.py`, which serves trimmed real responses from `tests/fixtures/meijer_*`). Every
+  failure is a `MeijerError`. The app's server only ever calls `ac.cnstrc.com`, never www.meijer.com
+  (Akamai blocks plain clients and the app doesn't imitate a browser); product photos are meijer.com URLs
+  the user's browser loads. A rotated public key is the usual failure: update `SEARCH_KEY` (users can set
+  `MEIJER_SEARCH_KEY` in `.env`) and refresh the fixtures. A 401/403, or a 400 whose message names the
+  key, means "changed" and makes the catalog unavailable; any other 400 is one bad search.
 - The Aldi cart (v7.2) uses the user's pasted aldi.us session cookie, kept in `aldi_session.json` in the
   data folder. It is a sign-in: never log it, never return it from an API (the page sees name, email and
   `connected_at`), and only `fill_cart` / `account` may send it, each on its own httpx client so the
@@ -128,7 +137,11 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
 - Hiding the Photo button when no backend is configured: the dialog explains instead.
 - Importing raw ingredient lines without a Claude backend; scaling servings automatically (the note
   covers it).
-- Filling Meijer or Walmart carts, or scraping meijer.com or walmart.com. Aldi's catalog is read (v7.1)
+- Filling the Meijer cart, reading www.meijer.com, and exact per-store Meijer prices. Meijer's catalog
+  is read through its Constructor.io search service (v7.4), which holds every store's price without
+  naming the store, so prices are a typical median; a browser extension on meijer.com is the unprobed
+  route to the user's own store and cart.
+- Filling the Walmart cart, or scraping walmart.com. Aldi's catalog is read (v7.1)
   and its cart filled through the user's own pasted sign-in (v7.2), Jake's decisions for a personal tool;
   the app never signs in to aldi.us itself (its login has a captcha, deliberately not bypassed) and
   never checks out. A bookmarklet run on aldi.us is the fallback if pasted cookies turn out to expire

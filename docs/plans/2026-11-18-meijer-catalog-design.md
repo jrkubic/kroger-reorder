@@ -49,7 +49,10 @@ meijer.com for now; Jake chose "catalog now, cart later".
    - Results that are not purchasable or are deactivated are dropped. `in_stock` is false only for
      `stockLevelStatus == "outOfStock"`.
    - `transport=` takes an `httpx.MockTransport` in tests. The key is `SEARCH_KEY`, overridable with
-     `MEIJER_SEARCH_KEY` in `.env`. No cookie, sign-in or meijer.com request is ever sent.
+     `MEIJER_SEARCH_KEY` in `.env`. The app's server sends no cookie or sign-in and never contacts
+     meijer.com: it calls only `ac.cnstrc.com`. Product photos are meijer.com image URLs that the
+     user's browser loads (checked: they load in a normal browser; Akamai refuses only headless
+     Chrome's user agent).
 2. **Errors.** A new `stores.CatalogError(status, message)` with the `unavailable` property becomes
    the base of `AldiError` and the new `MeijerError`; `main.py` handles and catches `CatalogError`
    where it caught `AldiError` (502 handler, import resolve, price refresh). Messages:
@@ -63,14 +66,16 @@ meijer.com for now; Jake chose "catalog now, cart later".
    wanted (at most 100), so dropped unbuyable ones don't shorten the answer.
 3. **Providers.** Meijer gets `catalog=True`, `product_prefix="meijer:"`, `cart=False` and a new
    `approx_prices=True`; `product_url` stays unset, so Open at Meijer searches meijer.com for the
-   matched product's name. `/api/state` reports `prefix` and `approx_prices` per store.
+   matched product's name. `/api/state` reports `prefix`, `approx_prices` and `site` (the store's
+   website host, e.g. `meijer.com`, for the page's wording) per store.
 4. **Routes.** `create_app(..., meijer=None)`. `has_catalog`, `catalog_search` and the price
    refresh pick the client by store (`clients = {"aldi": aldi, "meijer": meijer}`) instead of
    assuming Aldi; a store whose client is missing behaves as plain. Lookups for an import run four at
    a time, as for Aldi. Nothing else changes: plain items, hand-off and export work as today.
 5. **Page.** `isProduct` uses the store's prefix. On a Meijer list prices read "about $2.96" (sale:
    "about $1.79", old price struck through), and the store line reads "Typical Meijer prices from
-   meijer.com's search; your store's may differ." The Aldi store lookup runs only on Aldi lists.
+   meijer.com's search; your store's may differ." The Aldi store lookup runs only on Aldi lists. A
+   product photo that fails to load is replaced by the empty thumbnail placeholder, not a broken image.
 6. **Startup.** `__main__` builds a `MeijerClient` (nothing is fetched until a Meijer list searches).
 
 ## Data and compatibility
@@ -94,4 +99,4 @@ README: Features, Using the app (Meijer lists), Configuration (`MEIJER_SEARCH_KE
 Troubleshooting (the three messages above), Project structure (`meijer.py`), Design documents,
 Version history v7.4. `.env.example` describes `MEIJER_SEARCH_KEY`. AGENTS.md: the layout row and
 the "deliberately not done" note (Meijer's catalog is read through its search service; its cart is
-still not filled, and meijer.com itself is never contacted).
+still not filled, and the app's server never contacts meijer.com itself).
