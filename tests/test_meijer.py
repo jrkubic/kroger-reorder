@@ -120,9 +120,41 @@ def test_price_is_the_median_store_price(client):
 def test_promo_is_the_median_sale_price_when_lower(client):
     found = client.lookup_products(["meijer:4125010210", "meijer:4011"])
     milk = found["meijer:4125010210"]
-    assert (milk["price"], milk["promo"]) == (3.09, 2.54)  # on sale at four of six stores
+    # On sale at four of six stores (2.94->2.49, 3.32->2.49, 3.08->2.59, 3.10->2.49): the median of those four.
+    assert (milk["price"], milk["promo"]) == (3.09, 2.49)
     # Not on sale: the service repeats the price as the "sale" price, which is not a promo.
     assert (found["meijer:4011"]["price"], found["meijer:4011"]["promo"]) == (0.28, None)
+
+
+def _priced(client, service, prices, sale_prices):
+    eggs = service.items["response"]["results"][3]
+    eggs["variations_map"] = [{"unit": "EA", "prices": prices, "sale_prices": sale_prices}]
+    found = client.lookup_products(["meijer:71373381494"])["meijer:71373381494"]
+    return found["price"], found["promo"]
+
+
+def test_a_sale_needs_most_stores(client, service):
+    prices = [2.08, 2.5, 2.96, 3.2, 3.58]
+    # One store above the median on sale would pull the median of sale prices down: still no sale.
+    assert _priced(client, service, prices, [2.08, 2.5, 2.96, 3.2, 2.0]) == (2.96, None)
+    # Exactly half the stores is not most of them.
+    assert _priced(client, service, [3.0, 3.0, 3.0, 3.0], [2.0, 2.0, 3.0, 3.0]) == (3.0, None)
+    # Three of five: the median of those three sale prices.
+    assert _priced(client, service, prices, [1.5, 2.5, 2.5, 2.9, 3.58]) == (2.96, 2.5)
+
+
+def test_sale_prices_that_do_not_pair_with_prices_give_no_promo(client, service):
+    assert _priced(client, service, [3.0, 3.0, 3.0], [2.0, 2.0]) == (3.0, None)
+    assert _priced(client, service, [3.0, 3.0, 3.0], []) == (3.0, None)
+
+
+def test_zero_or_negative_prices_are_ignored(client, service):
+    # A 0 sale price is not a sale, and a 0 store price doesn't drag the median down.
+    assert _priced(client, service, [0, 3.0, 3.0, 3.0], [0, 0, 0, 2.0]) == (3.0, None)
+    assert _priced(client, service, [3.0, 3.0, 3.0], [0, 0.0, -1]) == (3.0, None)
+    assert _priced(client, service, [0, 0], [0, 0]) == (1.69, None)            # the listed price stands in
+    service.items["response"]["results"][3]["data"]["price"] = 0
+    assert _priced(client, service, [], []) == (None, None)
 
 
 def test_price_uses_the_variations_in_the_listed_unit(client, service):
@@ -216,7 +248,8 @@ HTTP_400 = "Meijer's search said HTTP 400."
     (httpx.Response(400, json={"message": "You have supplied an invalid `key` or `autocomplete_key`. You can "
                                           "find your key at app.constructor.io/dashboard/accounts/api_integration."}),
      502, CHANGED, True),
-    (httpx.Response(400, json={"message": "Invalid KEY"}), 502, CHANGED, True),
+    (httpx.Response(400, json={"message": "Invalid `KEY` supplied"}), 502, CHANGED, True),
+    (httpx.Response(400, json={"message": "Invalid filter key: brand"}), 502, HTTP_400, False),
     (httpx.Response(400, json={"message": "num_results_per_page must be at most 200"}), 502, HTTP_400, False),
     (httpx.Response(400, json=["key"]), 502, HTTP_400, False),
     (httpx.Response(400, text="Bad Request"), 502, HTTP_400, False),

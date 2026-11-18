@@ -60,35 +60,56 @@ def split_name(title: str, by_weight: bool = False, unit: str = "") -> tuple[str
 
 def _bad_key(response: httpx.Response) -> bool:
     """Constructor answers a rotated or unknown key with HTTP 400 and
-    {"message": "You have supplied an invalid `key` ..."}; other 400s are about the request."""
+    {"message": "You have supplied an invalid `key` ..."}; other 400s (an "invalid filter key", say) are
+    about the request."""
     try:
         message = response.json().get("message")
     except (ValueError, AttributeError):
         return False
-    return isinstance(message, str) and "key" in message.lower()
+    return isinstance(message, str) and "`key`" in message.lower()
 
 
-def _numbers(groups: list, key: str) -> list[float]:
-    return [float(p) for g in groups if isinstance(g, dict) for p in g.get(key) or []
-            if isinstance(p, (int, float)) and not isinstance(p, bool)]
+def _amount(value) -> float | None:
+    """A usable price: a positive number. A 0 sale price must never show as "about $0.00"."""
+    ok = isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+    return float(value) if ok else None
 
 
 def _prices(result: dict) -> tuple[float | None, float | None]:
-    """(price, promo): the median store price, and the median sale price when it is lower. With no
-    variations the listed price (whichever store's surfaced) stands in."""
+    """(price, promo): the median store price, and a sale only when more than half the stores have it
+    on sale, as the median of their sale prices. The "all" aggregations list `prices` and
+    `sale_prices` in the same variation order (checked live, 2026-11-18), so a store's pair shares an
+    index; a group whose lists differ in length gives no promo. With no variations the listed price
+    (whichever store's surfaced) stands in."""
     groups = result.get("variations_map")
     groups = [g for g in groups if isinstance(g, dict)] if isinstance(groups, list) else []
     unit = (result.get("data") or {}).get("priceUnit")
     same_unit = [g for g in groups if unit and g.get("unit") == unit]
     groups = same_unit or groups          # a product sold in two units: the one its price is quoted in
-    prices, sales = _numbers(groups, "prices"), _numbers(groups, "sale_prices")
+    prices: list[float] = []
+    sales: list[float] = []               # the sale prices of stores where it is on sale
+    paired = True
+    for group in groups:
+        listed, sale = group.get("prices"), group.get("sale_prices")
+        listed = listed if isinstance(listed, list) else []
+        sale = sale if isinstance(sale, list) else []
+        paired = paired and len(listed) == len(sale)
+        for n, value in enumerate(listed):
+            price = _amount(value)
+            if price is None:
+                continue
+            prices.append(price)
+            on_sale = _amount(sale[n]) if n < len(sale) else None
+            if on_sale is not None and on_sale < price:
+                sales.append(on_sale)
     if not prices:
-        listed = (result.get("data") or {}).get("price")
-        ok = isinstance(listed, (int, float)) and not isinstance(listed, bool)
-        return (round(float(listed), 2) if ok else None), None
+        listed_price = _amount((result.get("data") or {}).get("price"))
+        return (round(listed_price, 2) if listed_price is not None else None), None
     price = round(median(prices), 2)
-    promo = round(median(sales), 2) if sales else None
-    return price, promo if promo is not None and promo < price else None
+    if not paired or len(sales) * 2 <= len(prices):
+        return price, None
+    promo = round(median(sales), 2)
+    return price, promo if promo < price else None
 
 
 class MeijerClient:

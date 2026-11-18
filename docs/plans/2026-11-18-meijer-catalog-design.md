@@ -44,8 +44,11 @@ meijer.com for now; Jake chose "catalog now, cart later".
    `{upc: "meijer:<id>", name, size, brand: "", image, price, promo, in_stock}`:
    - `name`/`size`: split at the last ", " when the tail is short (≤ 24 characters), else the whole
      title and `""`; a by-weight item with no size gets `per lb` from `priceUnit`.
-   - `price`: median of the store prices; `promo`: median of `discountSalePriceValue`, kept only when
-     lower than `price`. With no variations, the top-level `price` stands in.
+   - `price`: median of the store prices. `promo`: only when more than half the stores have it on
+     sale (a store's `discountSalePriceValue` below its own `price`; the two "all" lists share the
+     variation order, checked live on 120 products), the median of those stores' sale prices, kept
+     only when lower than `price`; lists of different lengths give no promo. Prices of 0 or less are
+     ignored. With no variations, the top-level `price` stands in.
    - Results that are not purchasable or are deactivated are dropped. `in_stock` is false only for
      `stockLevelStatus == "outOfStock"`.
    - `transport=` takes an `httpx.MockTransport` in tests. The key is `SEARCH_KEY`, overridable with
@@ -57,8 +60,8 @@ meijer.com for now; Jake chose "catalog now, cart later".
    the base of `AldiError` and the new `MeijerError`; `main.py` handles and catches `CatalogError`
    where it caught `AldiError` (502 handler, import resolve, price refresh). Messages:
    transport → `Couldn't reach Meijer's search: <detail>`; HTTP error →
-   `Meijer's search said HTTP <n>.`; a rejected key (HTTP 401/403, or a 400 whose message names the
-   key, which is what Constructor answers for an unknown key) or an unexpected shape →
+   `Meijer's search said HTTP <n>.`; a rejected key (HTTP 401/403, or a 400 whose message contains
+   `` `key` ``, as Constructor's "You have supplied an invalid `key` ..." does) or an unexpected shape →
    `Meijer's search changed; Meijer lists work as plain lists until the app is updated.` Only that
    message and an unreachable service make the whole catalog unavailable; any other 400 is one bad
    search. A search term is normalised first (whitespace collapsed, cut to 100 characters); one with

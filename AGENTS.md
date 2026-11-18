@@ -104,8 +104,8 @@ with `httpx.MockTransport` as `tests/test_kroger.py` does; if it needs Claude, i
   failure is a `MeijerError`. The app's server only ever calls `ac.cnstrc.com`, never www.meijer.com
   (Akamai blocks plain clients and the app doesn't imitate a browser); product photos are meijer.com URLs
   the user's browser loads. A rotated public key is the usual failure: update `SEARCH_KEY` (users can set
-  `MEIJER_SEARCH_KEY` in `.env`) and refresh the fixtures. A 401/403, or a 400 whose message names the
-  key, means "changed" and makes the catalog unavailable; any other 400 is one bad search.
+  `MEIJER_SEARCH_KEY` in `.env`) and refresh the fixtures. A 401/403, or a 400 whose message names
+  `` `key` `` (Constructor's "invalid `key`"), means "changed" and makes the catalog unavailable; any other 400 is one bad search.
 - The Aldi cart (v7.2) uses the user's pasted aldi.us session cookie, kept in `aldi_session.json` in the
   data folder. It is a sign-in: never log it, never return it from an API (the page sees name, email and
   `connected_at`), and only `fill_cart` / `account` may send it, each on its own httpx client so the

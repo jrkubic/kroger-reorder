@@ -55,7 +55,7 @@ function priceHtml(p, approx = false) {
 }
 
 function thumb(url) {
-  return url ? `<img class="thumb" src="${esc(url)}" alt="" loading="lazy">` : `<div class="thumb placeholder"></div>`;
+  return url ? `<img class="thumb" src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<div class="thumb placeholder"></div>`;
 }
 // A photo the store's site won't serve (meijer.com refuses some browsers) shows the placeholder, not a
 // broken-image icon. Error events don't bubble, so listen in the capture phase.
