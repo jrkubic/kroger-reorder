@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 
 from kroger_reorder.aldi import CHANGED, SIGNED_OUT, AldiError, CartResult
 from kroger_reorder.kroger import KrogerError, NotSignedIn
-from kroger_reorder.main import create_app
+from kroger_reorder.main import CATALOG_PARALLEL, create_app
+from kroger_reorder.meijer import CHANGED as MEIJER_CHANGED, MeijerError
 from kroger_reorder.recipe import Extracted, Page, RecipeError
 from kroger_reorder.storage import Item, Storage
 from kroger_reorder.vision import Suggestion, VisionError
@@ -98,11 +99,15 @@ def test_initial_state_has_default_list(client):
         "lists": [{"slug": "standard", "name": "Standard", "count": 0, "store": "kroger"}],
         "active_list": "standard",
         "photo_backend": None, "public_url": "http://localhost:8000",
-        # No Aldi client in this app: Aldi lists are plain until one is configured.
-        "stores": [{"key": "kroger", "name": "Kroger", "catalog": True, "cart": True, "linked_cart": False},
-                   {"key": "aldi", "name": "Aldi", "catalog": False, "cart": False, "linked_cart": False},
-                   {"key": "meijer", "name": "Meijer", "catalog": False, "cart": False, "linked_cart": False},
-                   {"key": "walmart", "name": "Walmart", "catalog": False, "cart": False, "linked_cart": False}],
+        # No Aldi or Meijer client in this app: their lists are plain until one is configured.
+        "stores": [{"key": "kroger", "name": "Kroger", "catalog": True, "cart": True, "linked_cart": False,
+                    "prefix": "", "approx_prices": False, "site": None},
+                   {"key": "aldi", "name": "Aldi", "catalog": False, "cart": False, "linked_cart": False,
+                    "prefix": "aldi:", "approx_prices": False, "site": "aldi.us"},
+                   {"key": "meijer", "name": "Meijer", "catalog": False, "cart": False, "linked_cart": False,
+                    "prefix": "meijer:", "approx_prices": True, "site": "meijer.com"},
+                   {"key": "walmart", "name": "Walmart", "catalog": False, "cart": False, "linked_cart": False,
+                    "prefix": "", "approx_prices": False, "site": "walmart.com"}],
         "aldi_account": None, "kroger_cart": {"count": 0},
     }
 
@@ -385,7 +390,8 @@ def aldi_list(aldi_client):
 
 def test_state_reports_aldi_catalog_when_configured(aldi_client):
     stores = {s["key"]: s for s in aldi_client.get("/api/state").json()["stores"]}
-    assert stores["aldi"] == {"key": "aldi", "name": "Aldi", "catalog": True, "cart": False, "linked_cart": True}
+    assert stores["aldi"] == {"key": "aldi", "name": "Aldi", "catalog": True, "cart": False, "linked_cart": True,
+                              "prefix": "aldi:", "approx_prices": False, "site": "aldi.us"}
     assert stores["kroger"]["linked_cart"] is False
     assert aldi_client.get("/api/state").json()["aldi_account"] is None
 
@@ -491,6 +497,165 @@ def test_aldi_list_hands_off_with_product_pages(aldi_client, aldi_list, kroger):
         {"upc": "aldi:16902710", "name": "Whole Milk"}, {"upc": "candles", "name": "Candles"}])
     urls = [i["url"] for i in aldi_client.get(f"/api/lists/{aldi_list}/handoff").json()["items"]]
     assert urls == ["https://www.aldi.us/store/aldi/products/16902710", "https://www.aldi.us/store/aldi/s?k=Candles"]
+
+
+# -- Meijer catalog ------------------------------------------------------------------------
+
+def meijer_product(upc, name, **over):
+    base = {"upc": upc, "name": name, "brand": "", "size": "Gallon", "price": 2.96, "promo": None,
+            "in_stock": True, "image": f"https://www.meijer.com/content/dam/meijer/product/{upc[7:]}.png"}
+    base.update(over)
+    return base
+
+
+class FakeMeijer:
+    """The catalog half of MeijerClient: Meijer has no cart in the app."""
+
+    def __init__(self):
+        self.error: Exception | None = None
+        self.searches, self.lookups = [], []
+        self.catalog = {"meijer:4125010210": meijer_product("meijer:4125010210", "Meijer 2% Reduced Fat Milk"),
+                        "meijer:4125010200": meijer_product("meijer:4125010200", "Meijer Whole Milk",
+                                                            price=3.19, promo=2.99)}
+
+    def search_products(self, term, limit=10):
+        self.searches.append(term)
+        if self.error:
+            raise self.error
+        return [dict(p, name=f"{p['name']} for {term}") for p in self.catalog.values()][:limit]
+
+    def lookup_products(self, ids):
+        self.lookups.append(list(ids))
+        if self.error:
+            raise self.error
+        return {i: self.catalog[i] for i in ids if i in self.catalog}
+
+
+@pytest.fixture
+def fake_meijer():
+    return FakeMeijer()
+
+
+@pytest.fixture
+def meijer_client(storage, kroger, fake_aldi, fake_meijer):
+    return TestClient(create_app(storage, kroger, aldi=fake_aldi, meijer=fake_meijer), follow_redirects=False)
+
+
+@pytest.fixture
+def meijer_list(meijer_client):
+    return meijer_client.post("/api/lists", json={"name": "Meijer run", "store": "meijer"}).json()["slug"]
+
+
+def test_state_reports_meijer_catalog_and_prefixes(meijer_client, client):
+    stores = {s["key"]: s for s in meijer_client.get("/api/state").json()["stores"]}
+    assert stores["meijer"] == {"key": "meijer", "name": "Meijer", "catalog": True, "cart": False,
+                                "linked_cart": False, "prefix": "meijer:", "approx_prices": True,
+                                "site": "meijer.com"}
+    assert (stores["kroger"]["prefix"], stores["kroger"]["approx_prices"]) == ("", False)
+    assert (stores["walmart"]["catalog"], stores["walmart"]["prefix"]) == (False, "")
+    plain = {s["key"]: s for s in client.get("/api/state").json()["stores"]}
+    assert plain["meijer"]["catalog"] is False and plain["meijer"]["approx_prices"] is True
+
+
+def test_search_on_a_meijer_list(meijer_client, fake_meijer, fake_aldi):
+    r = meijer_client.get("/api/search", params={"term": "milk", "store": "meijer"})
+    assert r.status_code == 200
+    assert [p["upc"] for p in r.json()["results"]] == ["meijer:4125010210", "meijer:4125010200"]
+    assert fake_meijer.searches == ["milk"] and fake_aldi.searches == []
+    meijer_client.get("/api/search", params={"term": "eggs", "store": "aldi"})
+    assert fake_aldi.searches == ["eggs"] and fake_meijer.searches == ["milk"]
+
+
+def test_meijer_without_a_client_has_no_catalog(client, aldi_client):
+    for c in (client, aldi_client):
+        r = c.get("/api/search", params={"term": "milk", "store": "meijer"})
+        assert r.status_code == 400 and r.json()["error"] == "Meijer lists have no catalog; add items by name."
+        r = c.post("/api/import/resolve", json={"names": ["milk"], "store": "meijer"})
+        assert r.status_code == 400 and r.json()["error"] == "Meijer lists have no catalog; add items by name."
+    slug = client.post("/api/lists", json={"name": "Meijer run", "store": "meijer"}).json()["slug"]
+    r = client.post(f"/api/lists/{slug}/items", json={"upc": "meijer:4125010210", "name": "Meijer 2% Milk"})
+    assert r.json()["items"][0]["upc"] == "meijer-2-milk"   # no catalog: kept as a plain item
+    r = client.post(f"/api/lists/{slug}/prices")
+    assert r.status_code == 400 and r.json()["error"] == "This list is for Meijer; use Open at Meijer instead."
+
+
+def test_add_and_price_refresh_on_a_meijer_list(meijer_client, meijer_list, fake_meijer, fake_aldi):
+    milk = meijer_product("meijer:4125010210", "Meijer 2% Reduced Fat Milk", price=2.78)
+    meijer_client.post(f"/api/lists/{meijer_list}/items",
+                       json={k: milk[k] for k in ("upc", "name", "size", "image", "price", "promo")})
+    r = meijer_client.post(f"/api/lists/{meijer_list}/items", json={"name": "Birthday candles"})
+    assert [(i["upc"], i["size"], i["price"]) for i in r.json()["items"]] == [
+        ("meijer:4125010210", "Gallon", 2.78), ("birthday-candles", "", None)]
+    r = meijer_client.post(f"/api/lists/{meijer_list}/prices")
+    assert r.status_code == 200 and r.json()["failed"] == 0
+    assert fake_meijer.lookups == [["meijer:4125010210"]] and fake_aldi.lookups == []
+    milk, candles = r.json()["items"]
+    assert milk["price"] == 2.96 and milk["price_checked_at"]
+    assert (candles["price"], candles["price_checked_at"]) == (None, None)
+    fake_meijer.error = MeijerError(0, "Couldn't reach Meijer's search: ConnectError")
+    r = meijer_client.post(f"/api/lists/{meijer_list}/prices")
+    assert r.status_code == 502 and r.json()["error"] == "Couldn't check prices: Couldn't reach Meijer's search: ConnectError"
+
+
+def test_import_into_meijer_keeps_catalog_products_and_plain_rows(meijer_client, meijer_list):
+    picks = [{"upc": "meijer:4125010210", "name": "Meijer 2% Reduced Fat Milk", "size": "Gallon", "price": 2.96,
+              "quantity": 2},
+             {"upc": "aldi:16902710", "name": "Whole Milk"},        # another store's product: plain here
+             {"upc": "", "name": "Birthday candles"}]
+    items = meijer_client.post(f"/api/lists/{meijer_list}/import", json=picks).json()["items"]
+    assert [(i["upc"], i["quantity"], i["size"], i["price"]) for i in items] == [
+        ("meijer:4125010210", 2, "Gallon", 2.96), ("whole-milk", 1, "", None), ("birthday-candles", 1, "", None)]
+
+
+def test_import_resolve_on_meijer(meijer_client, fake_meijer):
+    names = [f"item {n}" for n in range(9)]
+    r = meijer_client.post("/api/import/resolve", json={"names": names, "store": "meijer"})
+    assert r.status_code == 200
+    matches = r.json()["matches"]
+    assert [m["name"] for m in matches] == names   # input order, though lookups run in parallel
+    assert [c["name"] for c in matches[3]["candidates"]] == [
+        "Meijer 2% Reduced Fat Milk for item 3", "Meijer Whole Milk for item 3"]
+    assert sorted(fake_meijer.searches) == sorted(names)
+
+
+def test_meijer_down_falls_back(meijer_client, meijer_list, fake_meijer):
+    fake_meijer.error = MeijerError(0, "Couldn't reach Meijer's search: ConnectError")
+    r = meijer_client.post("/api/import/resolve", json={"names": ["milk", "eggs"], "store": "meijer"})
+    assert r.status_code == 502
+    assert r.json()["error"] == "Couldn't look up any items: Couldn't reach Meijer's search: ConnectError"
+    r = meijer_client.get("/api/search", params={"term": "milk", "store": "meijer"})
+    assert r.status_code == 502 and r.json()["error"] == "Couldn't reach Meijer's search: ConnectError"
+    fake_meijer.error = MeijerError(400, MEIJER_CHANGED)
+    r = meijer_client.get("/api/search", params={"term": "milk", "store": "meijer"})
+    assert r.status_code == 502 and r.json()["error"] == MEIJER_CHANGED
+    # Typed items still go on the list while the catalog is down.
+    r = meijer_client.post(f"/api/lists/{meijer_list}/items", json={"name": "Eggs"})
+    assert r.status_code == 200 and r.json()["items"][0]["upc"] == "eggs"
+
+
+def test_meijer_resolve_stops_early_once_the_search_changed(meijer_client, fake_meijer):
+    fake_meijer.error = MeijerError(502, MEIJER_CHANGED)
+    names = [f"item {n}" for n in range(12)]
+    r = meijer_client.post("/api/import/resolve", json={"names": names, "store": "meijer"})
+    assert r.status_code == 502 and r.json()["error"] == f"Couldn't look up any items: {MEIJER_CHANGED}"
+    # Each worker searches at most once before the first failure marks the catalog down; the rest skip.
+    assert len(fake_meijer.searches) <= CATALOG_PARALLEL < len(names)
+
+
+def test_meijer_list_hands_off_with_search_links(meijer_client, meijer_list):
+    meijer_client.put(f"/api/lists/{meijer_list}/items", json=[
+        {"upc": "meijer:4125010210", "name": "Meijer 2% Milk"}, {"upc": "candles", "name": "Candles"}])
+    urls = [i["url"] for i in meijer_client.get(f"/api/lists/{meijer_list}/handoff").json()["items"]]
+    assert urls == ["https://www.meijer.com/shopping/search.html?text=Meijer%202%25%20Milk",
+                    "https://www.meijer.com/shopping/search.html?text=Candles"]
+
+
+def test_push_on_a_meijer_list_with_a_catalog_is_still_refused(meijer_client, meijer_list, kroger):
+    kroger.signed_in = True
+    r = meijer_client.post(f"/api/lists/{meijer_list}/push",
+                           json=[{"upc": "meijer:4125010210", "name": "Meijer 2% Milk", "quantity": 1}])
+    assert r.status_code == 400 and r.json()["error"] == "This list is for Meijer; use Open at Meijer instead."
+    assert kroger.cart_calls == []
 
 
 def test_handoff_on_a_kroger_list_is_400(client):

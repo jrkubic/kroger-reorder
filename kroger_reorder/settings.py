@@ -30,6 +30,7 @@ class Settings:
     aldi_search_hash: str | None = None
     aldi_items_hash: str | None = None
     aldi_location_hash: str | None = None
+    meijer_search_key: str | None = None   # replacement Constructor.io key for Meijer search; None -> meijer.SEARCH_KEY
 
     @property
     def redirect_uri(self) -> str:
@@ -85,4 +86,5 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         aldi_search_hash=(env.get("ALDI_SEARCH_HASH") or "").strip() or None,
         aldi_items_hash=(env.get("ALDI_ITEMS_HASH") or "").strip() or None,
         aldi_location_hash=(env.get("ALDI_LOCATION_HASH") or "").strip() or None,
+        meijer_search_key=(env.get("MEIJER_SEARCH_KEY") or "").strip() or None,
     )

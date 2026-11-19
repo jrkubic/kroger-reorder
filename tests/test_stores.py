@@ -1,14 +1,15 @@
 # tests/test_stores.py
 import pytest
 
-from kroger_reorder.stores import (DEFAULT_STORE, PROVIDERS, UnknownStore, item_key, provider, search_link,
-                                   is_product, shop_link, store_names)
+from kroger_reorder.aldi import CHANGED, AldiError
+from kroger_reorder.stores import (DEFAULT_STORE, PROVIDERS, CatalogError, UnknownStore, item_key, provider,
+                                   search_link, is_product, shop_link, store_names)
 
 
-def test_kroger_is_the_default_and_the_only_catalog_store():
+def test_kroger_is_the_default_and_the_only_cart_store():
     assert DEFAULT_STORE == "kroger"
     assert [k for k, p in PROVIDERS.items() if p.cart] == ["kroger"]
-    assert [k for k, p in PROVIDERS.items() if p.catalog] == ["kroger", "aldi"]
+    assert [k for k, p in PROVIDERS.items() if p.catalog] == ["kroger", "aldi", "meijer"]
     assert list(PROVIDERS) == ["kroger", "aldi", "meijer", "walmart"]
 
 
@@ -32,6 +33,23 @@ def test_is_product_is_scoped_to_the_store():
     assert not is_product("aldi", "16902710")        # a Kroger UPC, or a plain item named "16902710"
     assert not is_product("aldi", "whole-milk") and not is_product("aldi", "aldi:")
     assert not is_product("meijer", "123")
+
+
+def test_meijer_products_carry_the_meijer_prefix():
+    assert is_product("meijer", "meijer:4125010210")
+    for upc in ("aldi:4125010210", "4125010210", "whole-milk", "meijer:"):
+        assert not is_product("meijer", upc), upc
+    assert not is_product("aldi", "meijer:4125010210") and not is_product("kroger", "meijer:4125010210")
+
+
+def test_meijer_products_open_a_meijer_search_for_the_name():
+    # meijer.com product URLs couldn't be verified, so a matched product still opens a search.
+    assert shop_link("meijer", "meijer:4125010210", "Meijer 2% Milk") == (
+        "https://www.meijer.com/shopping/search.html?text=Meijer%202%25%20Milk")
+
+
+def test_only_meijer_prices_are_approximate():
+    assert [k for k, p in PROVIDERS.items() if p.approx_prices] == ["meijer"]
 
 
 def test_shop_link_uses_the_product_page_for_catalog_products():
@@ -61,3 +79,9 @@ def test_item_key_is_a_name_slug():
 
 def test_store_names_for_messages():
     assert store_names() == "Kroger, Aldi, Meijer, or Walmart"
+
+
+def test_store_errors_share_a_base():
+    exc = AldiError(502, CHANGED)
+    assert isinstance(exc, CatalogError) and exc.unavailable
+    assert CatalogError(0, "Couldn't reach x").unavailable and not CatalogError(502, "HTTP 500").unavailable
