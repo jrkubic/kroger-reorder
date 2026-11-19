@@ -481,8 +481,9 @@ async function openHandoff() {
     const data = await api('GET', listPath('/handoff'));
     handoffText = data.text;
     $('handoff-title').textContent = `Shop this list at ${data.store_name}`;
-    $('handoff-intro').textContent = `${data.store_name} has no public way to fill a cart, so each item opens a search on ${hostOf(data.home_url)}. Copy the list to take it along in a notes app.`;
-    $('handoff-items').innerHTML = data.items.map(i => `<li><div class="name">${esc(i.name)}${i.quantity > 1 ? ` <span class="qty">\u00d7${i.quantity}</span>` : ''}</div><a href="${esc(i.url)}" target="_blank" rel="noopener">Search at ${esc(data.store_name)} \u2197</a></li>`).join('');
+    const opens = data.items.some(i => i.product) ? 'its product page or a search' : 'a search';
+    $('handoff-intro').textContent = `${data.store_name} has no public way to fill a cart, so each item opens ${opens} on ${hostOf(data.home_url)}. Copy the list to take it along in a notes app.`;
+    $('handoff-items').innerHTML = data.items.map(i => `<li><div class="name">${esc(i.name)}${i.quantity > 1 ? ` <span class="qty">\u00d7${i.quantity}</span>` : ''}</div><a href="${esc(i.url)}" target="_blank" rel="noopener">${i.product ? 'View' : 'Search'} at ${esc(data.store_name)} \u2197</a></li>`).join('');
     $('handoff-home').href = data.home_url;
     $('handoff-home').textContent = `Open ${hostOf(data.home_url)} \u2197`;
     $('handoff-text').classList.add('hidden');

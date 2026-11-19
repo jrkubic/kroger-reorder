@@ -311,8 +311,9 @@ def test_handoff_lists_checked_items_with_search_links_and_text(client, aldi):
     assert r.status_code == 200
     assert r.json() == {
         "store": "aldi", "store_name": "Aldi", "home_url": "https://www.aldi.us/",
-        "items": [{"name": "Bananas", "quantity": 2, "url": "https://www.aldi.us/store/aldi/s?k=Bananas"},
-                  {"name": "Oat milk & co", "quantity": 1, "url": "https://www.aldi.us/store/aldi/s?k=Oat%20milk%20%26%20co"}],
+        "items": [{"name": "Bananas", "quantity": 2, "url": "https://www.aldi.us/store/aldi/s?k=Bananas", "product": False},
+                  {"name": "Oat milk & co", "quantity": 1, "url": "https://www.aldi.us/store/aldi/s?k=Oat%20milk%20%26%20co",
+                   "product": False}],
         "text": "Aldi run\n- Bananas ×2\n- Oat milk & co"}
 
 
@@ -495,8 +496,9 @@ def test_aldi_list_hands_off_with_product_pages(aldi_client, aldi_list, kroger):
     kroger.signed_in = True
     aldi_client.put(f"/api/lists/{aldi_list}/items", json=[
         {"upc": "aldi:16902710", "name": "Whole Milk"}, {"upc": "candles", "name": "Candles"}])
-    urls = [i["url"] for i in aldi_client.get(f"/api/lists/{aldi_list}/handoff").json()["items"]]
-    assert urls == ["https://www.aldi.us/store/aldi/products/16902710", "https://www.aldi.us/store/aldi/s?k=Candles"]
+    items = aldi_client.get(f"/api/lists/{aldi_list}/handoff").json()["items"]
+    assert [(i["url"], i["product"]) for i in items] == [
+        ("https://www.aldi.us/store/aldi/products/16902710", True), ("https://www.aldi.us/store/aldi/s?k=Candles", False)]
 
 
 # -- Meijer catalog ------------------------------------------------------------------------
@@ -642,12 +644,21 @@ def test_meijer_resolve_stops_early_once_the_search_changed(meijer_client, fake_
     assert len(fake_meijer.searches) <= CATALOG_PARALLEL < len(names)
 
 
-def test_meijer_list_hands_off_with_search_links(meijer_client, meijer_list):
+def test_meijer_list_hands_off_with_product_pages(meijer_client, meijer_list):
     meijer_client.put(f"/api/lists/{meijer_list}/items", json=[
         {"upc": "meijer:4125010210", "name": "Meijer 2% Milk"}, {"upc": "candles", "name": "Candles"}])
-    urls = [i["url"] for i in meijer_client.get(f"/api/lists/{meijer_list}/handoff").json()["items"]]
-    assert urls == ["https://www.meijer.com/shopping/search.html?text=Meijer%202%25%20Milk",
-                    "https://www.meijer.com/shopping/search.html?text=Candles"]
+    items = meijer_client.get(f"/api/lists/{meijer_list}/handoff").json()["items"]
+    assert [(i["url"], i["product"]) for i in items] == [
+        ("https://www.meijer.com/shopping/product/meijer-2-milk/4125010210.html", True),
+        ("https://www.meijer.com/shopping/search.html?text=Candles", False)]
+
+
+def test_meijer_product_links_need_no_client(client):
+    # A saved Meijer id still names a meijer.com page when the app runs without Meijer's search.
+    slug = client.post("/api/lists", json={"name": "Meijer run", "store": "meijer"}).json()["slug"]
+    client.put(f"/api/lists/{slug}/items", json=[{"upc": "meijer:4125010210", "name": "Meijer 2% Milk"}])
+    [item] = client.get(f"/api/lists/{slug}/handoff").json()["items"]
+    assert (item["url"], item["product"]) == ("https://www.meijer.com/shopping/product/meijer-2-milk/4125010210.html", True)
 
 
 def test_push_on_a_meijer_list_with_a_catalog_is_still_refused(meijer_client, meijer_list, kroger):

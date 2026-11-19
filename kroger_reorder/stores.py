@@ -23,7 +23,8 @@ class Provider:
     cart: bool                      # Send to cart; only these lists require catalog products
     search_url: str | None = None   # "{term}" is replaced by the URL-encoded search term
     home_url: str | None = None
-    product_url: str | None = None  # "{id}" is replaced by a catalog product id, for Open at <store>
+    product_url: str | None = None  # "{id}" is replaced by a catalog product id and "{slug}" by the item's
+                                    # name as a URL slug, for Open at <store>
     product_prefix: str = ""        # catalog ids are stored as prefix + digits; Kroger UPCs are bare digits
     linked_cart: bool = False       # a cart reached through the user's pasted sign-in (Aldi); the list stays
                                     # a hand-off list: plain items allowed, Open at <store> still offered
@@ -37,6 +38,8 @@ PROVIDERS: dict[str, Provider] = {p.key: p for p in (
              product_prefix="aldi:", linked_cart=True),
     Provider("meijer", "Meijer", catalog=True, cart=False,
              search_url="https://www.meijer.com/shopping/search.html?text={term}", home_url="https://www.meijer.com/",
+             # meijer.com finds the page by the id; the slug only reads well (any text works, checked 2026-11-19).
+             product_url="https://www.meijer.com/shopping/product/{slug}/{id}.html",
              product_prefix="meijer:", approx_prices=True),
     Provider("walmart", "Walmart", catalog=False, cart=False,
              search_url="https://www.walmart.com/search?q={term}", home_url="https://www.walmart.com/"),
@@ -44,7 +47,7 @@ PROVIDERS: dict[str, Provider] = {p.key: p for p in (
 assert DEFAULT_STORE in PROVIDERS and PROVIDERS[DEFAULT_STORE].cart
 
 __all__ = ["DEFAULT_STORE", "PROVIDERS", "CatalogError", "Provider", "UnknownStore", "item_key", "provider",
-           "search_link", "is_product", "shop_link", "store_names"]
+           "search_link", "is_product", "has_product_page", "shop_link", "store_names"]
 
 
 def store_names() -> str:
@@ -99,11 +102,16 @@ def is_product(key: str, upc: str) -> bool:
     return rest.isdigit()
 
 
+def has_product_page(key: str, upc: str) -> bool:
+    """Does Open at <store> link this item to its own product page (rather than a search)?"""
+    return bool(provider(key).product_url) and is_product(key, upc)
+
+
 def shop_link(key: str, upc: str, name: str) -> str:
     """Where Open at <store> sends an item: its product page when it is a catalog product, else a search."""
     p = provider(key)
-    if p.product_url and is_product(key, upc):
-        return p.product_url.format(id=upc[len(p.product_prefix):])
+    if has_product_page(key, upc):
+        return p.product_url.format(id=upc[len(p.product_prefix):], slug=slugify(name, fallback="item"))
     return search_link(key, name)
 
 
