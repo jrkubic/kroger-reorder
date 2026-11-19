@@ -26,7 +26,12 @@ meijer.com for now; Jake chose "catalog now, cart later".
   `{"group_by":[{"name":"unit","field":"data.priceUnit"}],"values":{"prices":{"aggregation":"all","field":"data.price"}, ...},"dtype":"array"}`
   returns every store price for each result (up to 50). Their median is stable between calls
   (gallon of 2%: about $2.96, stores $2.08–$3.58; dozen cage-free eggs: about $1.89).
-- Product page URLs could not be verified (meijer.com is blocked), so the app does not build them.
+- Product page URLs could not be verified (meijer.com is blocked), so v7.4 shipped without them.
+  **Follow-up (2026-11-19):** public search results show pages at
+  `https://www.meijer.com/shopping/product/<slug>/<id>.html` with the same id the search service
+  returns, and Jake confirmed in his browser that `/shopping/product/x/4125010210.html` opens the
+  gallon of 2% milk: the slug is ignored. Meijer now has `product_url` (slug = the item name's slug),
+  and the hand-off items carry `product` so the panel reads **View at Meijer** for a product page.
 
 ## Approaches considered
 
@@ -68,8 +73,8 @@ meijer.com for now; Jake chose "catalog now, cart later".
    no letter or digit returns no results without a request. Search asks for five more results than
    wanted (at most 100), so dropped unbuyable ones don't shorten the answer.
 3. **Providers.** Meijer gets `catalog=True`, `product_prefix="meijer:"`, `cart=False` and a new
-   `approx_prices=True`; `product_url` stays unset, so Open at Meijer searches meijer.com for the
-   matched product's name. `/api/state` reports `prefix`, `approx_prices` and `site` (the store's
+   `approx_prices=True`; `product_url` was unset in v7.4 (Open at Meijer searched by name) and is the
+   product page since the follow-up above. `/api/state` reports `prefix`, `approx_prices` and `site` (the store's
    website host, e.g. `meijer.com`, for the page's wording) per store.
 4. **Routes.** `create_app(..., meijer=None)`. `has_catalog`, `catalog_search` and the price
    refresh pick the client by store (`clients = {"aldi": aldi, "meijer": meijer}`) instead of

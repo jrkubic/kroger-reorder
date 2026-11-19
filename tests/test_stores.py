@@ -42,10 +42,13 @@ def test_meijer_products_carry_the_meijer_prefix():
     assert not is_product("aldi", "meijer:4125010210") and not is_product("kroger", "meijer:4125010210")
 
 
-def test_meijer_products_open_a_meijer_search_for_the_name():
-    # meijer.com product URLs couldn't be verified, so a matched product still opens a search.
-    assert shop_link("meijer", "meijer:4125010210", "Meijer 2% Milk") == (
-        "https://www.meijer.com/shopping/search.html?text=Meijer%202%25%20Milk")
+def test_meijer_products_open_their_product_page():
+    # meijer.com finds a product page by the id alone (checked in Jake's browser with "x" in place of
+    # the name), so the name part is only there to read well.
+    assert shop_link("meijer", "meijer:4125010210", "Meijer 2% Reduced Fat Milk") == (
+        "https://www.meijer.com/shopping/product/meijer-2-reduced-fat-milk/4125010210.html")
+    assert shop_link("meijer", "meijer:4011", "") == "https://www.meijer.com/shopping/product/item/4011.html"
+    assert shop_link("meijer", "candles", "Candles") == "https://www.meijer.com/shopping/search.html?text=Candles"
 
 
 def test_only_meijer_prices_are_approximate():

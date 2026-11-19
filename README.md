@@ -61,7 +61,7 @@ Or with Docker: `docker compose up -d`. Full details, including registering the 
 
 ![A Meijer list searching for 2% milk, with photos and typical prices shown as about](img/meijer.png)
 
-**Shop an Aldi, Meijer or Walmart list on the store's site.** **Open at Aldi** links each item to its product page or a search, and copies the list as text.
+**Shop an Aldi, Meijer or Walmart list on the store's site.** **Open at Aldi** (or **Open at Meijer**) links each item to its product page or a search, and copies the list as text.
 
 ![The Open at Aldi panel with a search link for each item and a Copy list button](img/handoff.png)
 
@@ -320,7 +320,7 @@ Click **+**, name the list and pick the store. None of these stores has a public
 
 - The **Add an item** box searches Meijer's products and shows them with photo, size and price. Meijer's search holds a price for each store but doesn't say which store is which, so the app shows the middle one across up to 50 stores as "about $2.96", and, when most stores have it on sale, the typical sale price as "about $1.79" with the regular price struck through. Your store's price may differ by tens of cents: a gallon of Meijer 2% milk runs $2.08 to $3.58 across stores, $2.96 typically. The line under the list reads "Typical Meijer prices from meijer.com's search; your store's may differ." The last result is always **Add “…” as typed**.
 - **Import**, **Photo**, **Recipe** and **Check prices** work as on Aldi lists: three candidates per row plus **Add “…” as typed**, **Search for a different item…**, lookups four at a time, and one batched request per 50 matched products to refresh prices.
-- There is no Meijer cart to fill. **Open at Meijer** links every item, matched or not, to a meijer.com search for its name, and you add them to your cart there. Product pages aren't linked: their addresses couldn't be checked.
+- There is no Meijer cart to fill. **Open at Meijer** links each matched item to its product page on meijer.com (**View at Meijer**) and each item added as typed to a meijer.com search for its name (**Search at Meijer**); you add them to your cart there.
 - Meijer lists made before this version keep working; their items stay plain until you replace them with a match.
 - If Meijer's search can't be read, the list keeps working as a plain list, as Aldi lists do.
 
@@ -477,7 +477,7 @@ The page talks to this JSON API. All error responses have the shape `{"error": "
 | `POST` | `/api/lists/{slug}/prices` | Refresh prices from the catalog (Kroger, Aldi and Meijer lists) |
 | `POST` | `/api/lists/{slug}/push` | Send checked items to the cart and record an order: Kroger lists to Kroger's cart, Aldi lists to the connected aldi.us cart (answers also carry `skipped`, the checked items with no Aldi product) |
 | `GET` | `/api/lists/{slug}/export.csv` | Download the list as CSV |
-| `GET` | `/api/lists/{slug}/handoff` | Hand-off list only: checked items with a search link each on the store's site, plus a text version |
+| `GET` | `/api/lists/{slug}/handoff` | Hand-off list only: checked items, each with a link on the store's site (`product: true` when it opens the item's product page, else a search), plus a text version |
 
 ### Import
 
@@ -559,7 +559,7 @@ Run once after setup, or after changes that touch the Kroger client:
 8. Open the **Orders** tab, expand the order from step 3, and send it again.
 9. **Recipe** → paste a link → rows tagged needed / staple / on list → **Add to list**.
 10. **+** → an Aldi list → search `whole milk` and pick one, add `birthday candles` as typed → **Check prices** → **Open at Aldi**. The milk links to its product page, the candles to a search; **Copy list** copies the text.
-11. **+** → a Meijer list → search `2% milk` and pick one; its price reads "about $…" → **Check prices** → **Open at Meijer**. The milk links to a meijer.com search for its name.
+11. **+** → a Meijer list → search `2% milk` and pick one; its price reads "about $…" → **Check prices** → **Open at Meijer**. The milk links to its meijer.com product page (**View at Meijer**).
 
 ## Design documents
 
@@ -601,7 +601,7 @@ Meijer's catalog has no public API either, and www.meijer.com refuses plain HTTP
 
 - Prices are typical across Meijer stores, not your store's: the search holds every store's price without saying which is which.
 - It can stop working when Meijer changes the key. Meijer lists then fall back to plain names until you set `MEIJER_SEARCH_KEY` (see [Troubleshooting](#troubleshooting)) or update the app.
-- Items link to a meijer.com search, not the product page, and there is no Meijer cart to fill.
+- There is no Meijer cart to fill: matched items link to their meijer.com product pages and the rest to a search.
 
 ## Troubleshooting
 

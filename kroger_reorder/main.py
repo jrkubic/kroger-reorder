@@ -29,8 +29,8 @@ from .receipt import read as read_receipt
 from .recipe import extract as extract_recipe, fetch_page, suggest as suggest_recipe
 from .settings import DEFAULT_PHOTO_MODEL
 from .storage import DEFAULT_STORE, Item, ListLoad, Storage
-from .stores import (DEFAULT_STORE as KROGER, PROVIDERS, CatalogError, Provider, UnknownStore, is_product, item_key,
-                     provider, shop_link)
+from .stores import (DEFAULT_STORE as KROGER, PROVIDERS, CatalogError, Provider, UnknownStore, has_product_page,
+                     is_product, item_key, provider, shop_link)
 from .usage import profile_text, usage_profile
 from .vision import VisionError, analyze as analyze_photos
 
@@ -718,7 +718,8 @@ def create_app(storage: Storage, kroger, *, aldi=None, meijer=None, photo_model:
         chosen = [i for i in loaded.items if i.included and i.quantity > 0]
         lines = [f"- {i.name}" + (f" \u00d7{i.quantity}" if i.quantity > 1 else "") for i in chosen]
         return {"store": p.key, "store_name": p.name, "home_url": p.home_url,
-                "items": [{"name": i.name, "quantity": i.quantity, "url": shop_link(p.key, i.upc, i.name)}
+                "items": [{"name": i.name, "quantity": i.quantity, "url": shop_link(p.key, i.upc, i.name),
+                           "product": has_product_page(p.key, i.upc)}
                           for i in chosen],
                 "text": "\n".join([loaded.name, *lines])}
 
